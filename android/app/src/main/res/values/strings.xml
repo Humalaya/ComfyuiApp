@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MiniMax Kontrol</string>
+    <string name="title_activity_main">MiniMax Kontrol</string>
+    <string name="package_name">com.emir.minimaxcontrol</string>
+    <string name="custom_url_scheme">com.emir.minimaxcontrol</string>
+</resources>

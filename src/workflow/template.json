@@ -1,0 +1,377 @@
+{
+  "115": {
+    "inputs": {
+      "aspect_ratio": "9:16 (Portrait Widescreen)",
+      "megapixels": 0.2,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector (Size)"
+    }
+  },
+  "119": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "120": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "121": {
+    "inputs": {
+      "samples": ["125", 0],
+      "vae": ["120", 0]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE Decode Audio"
+    }
+  },
+  "123": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "124": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": ["750", 0],
+      "denoise": 1,
+      "model": ["674", 0]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "125": {
+    "inputs": {
+      "noise": ["129", 0],
+      "guider": ["126", 0],
+      "sampler": ["123", 0],
+      "sigmas": ["124", 0],
+      "latent_image": ["682", 0]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "126": {
+    "inputs": {
+      "model": ["674", 0],
+      "conditioning": ["648", 0]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "128": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "129": {
+    "inputs": {
+      "noise_seed": ["142", 0]
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "131": {
+    "inputs": {
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+      "values.a": ["132", 0]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "132": {
+    "inputs": {
+      "value": 7
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Video Length (seconds)"
+    }
+  },
+  "138": {
+    "inputs": {
+      "value": "For the target video, at 0.00 seconds into the target video, (from [Shot 1]) is fully referenced."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Prompt"
+    }
+  },
+  "142": {
+    "inputs": {
+      "seed": 903456545492912
+    },
+    "class_type": "easy seed",
+    "_meta": {
+      "title": "Click \"Manual Random Seed\" to start Gens!"
+    }
+  },
+  "148": {
+    "inputs": {
+      "any_02": ["149", 0]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Framerate"
+    }
+  },
+  "149": {
+    "inputs": {
+      "value": 24
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Framerate (Default 24)"
+    }
+  },
+  "626": {
+    "inputs": {
+      "any_01": ["115", 0]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Width"
+    }
+  },
+  "628": {
+    "inputs": {
+      "any_01": ["115", 1]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Height"
+    }
+  },
+  "644": {
+    "inputs": {
+      "prompt": ["138", 0],
+      "width": ["626", 0],
+      "height": ["628", 0],
+      "length": ["131", 1],
+      "clip": ["128", 0],
+      "vae": ["119", 0],
+      "first_frame": ["687", 0]
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {
+      "title": "MiniMax H3 Image to Video"
+    }
+  },
+  "645": {
+    "inputs": {
+      "any_02": ["646", 0]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Chosen Model"
+    }
+  },
+  "646": {
+    "inputs": {
+      "unet_name": "minimaxH3INT8INT4_fl2vaINT8Pruned.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "648": {
+    "inputs": {
+      "any_02": ["644", 0]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "CONDITIONING"
+    }
+  },
+  "674": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        "strength": 1
+      },
+      "lora_2": {
+        "on": false,
+        "lora": "HMNSFW_AIO_V2.safetensors",
+        "strength": 0.5
+      },
+      "lora_3": {
+        "on": false,
+        "lora": "PlagueKind-tiddies-realismslider.safetensors",
+        "strength": 1
+      },
+      "lora_4": {
+        "on": false,
+        "lora": "SynthPussy_H3_closeups_v1-step00008300.safetensors",
+        "strength": 1
+      },
+      "lora_5": {
+        "on": true,
+        "lora": "VBVR_H3_attn_only.safetensors",
+        "strength": 1
+      },
+      "lora_6": {
+        "on": false,
+        "lora": "bounceV07-000230_Intense.safetensors",
+        "strength": 1
+      },
+      "lora_7": {
+        "on": false,
+        "lora": "H3_Motion_BoosterV2.safetensors",
+        "strength": 1
+      },
+      "lora_8": {
+        "on": true,
+        "lora": "MysticXXX_MMH3-V4.safetensors",
+        "strength": 1
+      },
+      "lora_9": {
+        "on": false,
+        "lora": "Vagina_minimax-h3_epoch20.safetensors",
+        "strength": 1
+      },
+      "lora_10": {
+        "on": false,
+        "lora": "PenisV2_minimax-h3_epoch60.safetensors",
+        "strength": 1
+      },
+      "model": ["694", 0]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "682": {
+    "inputs": {
+      "any_01": ["644", 1]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "LATENT"
+    }
+  },
+  "687": {
+    "inputs": {
+      "image": "00085-1880121728.png",
+      "crop": "",
+      "max_megapixels": 2
+    },
+    "class_type": "LoadImageCrop",
+    "_meta": {
+      "title": "Load Image & Crop"
+    }
+  },
+  "691": {
+    "inputs": {
+      "max_resolution": 1024,
+      "jpeg_quality": 80,
+      "suppress_default_preview": true,
+      "preview_frames": ["131", 1],
+      "preview_fps": 6,
+      "tiny_vae": "taeh3.safetensors",
+      "model": ["645", 0],
+      "vae": ["119", 0]
+    },
+    "class_type": "ModelPreviewOverrideKJ",
+    "_meta": {
+      "title": "Model Preview Override"
+    }
+  },
+  "694": {
+    "inputs": {
+      "attention": "comfy kitchen attention",
+      "model": ["691", 0]
+    },
+    "class_type": "ModelAttentionBackend",
+    "_meta": {
+      "title": "ModelAttentionBackend"
+    }
+  },
+  "702": {
+    "inputs": {
+      "frame_rate": ["148", 0],
+      "loop_count": 0,
+      "filename_prefix": "mm",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 16,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": ["703", 0],
+      "audio": ["121", 0]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Video Combine"
+    }
+  },
+  "703": {
+    "inputs": {
+      "samples": ["747", 0],
+      "vae": ["119", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "747": {
+    "inputs": {
+      "any_02": ["125", 0]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Any Switch (rgthree)"
+    }
+  },
+  "750": {
+    "inputs": {
+      "value": 10
+    },
+    "class_type": "INTConstant",
+    "_meta": {
+      "title": "TOTAL STEPS"
+    }
+  }
+}
