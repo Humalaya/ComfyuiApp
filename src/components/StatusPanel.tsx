@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import type { ComfyConnectionStatus } from '../api/comfyClient'
 import type { Eta, GenerationResult, GenerationStatus, SamplingProgress } from '../hooks/useComfyGeneration'
 
 interface Props {
@@ -13,7 +14,15 @@ interface Props {
   error: string | null
   result: GenerationResult | null
   connectionLost: boolean
+  recovering: boolean
+  wsStatus: ComfyConnectionStatus
   onCancel: () => void
+}
+
+function wsStatusLabel(status: ComfyConnectionStatus): string | null {
+  if (status === 'reconnecting') return 'Bağlantı: yeniden bağlanılıyor…'
+  if (status === 'connecting') return 'Bağlantı: bağlanılıyor…'
+  return null // 'open' — nothing worth mentioning
 }
 
 function formatEta(eta: Eta): string | null {
@@ -34,6 +43,8 @@ export function StatusPanel({
   error,
   result,
   connectionLost,
+  recovering,
+  wsStatus,
   onCancel,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -57,7 +68,13 @@ export function StatusPanel({
         <button type="button" className="secondary-button" onClick={() => videoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
           Sonucu Görüntüle
         </button>
-        <video ref={videoRef} className="result-video" src={result.url} controls autoPlay loop playsInline />
+        {/* muted is required for autoPlay to be allowed unmuted-by-default at
+            all, but it matters even more here specifically: this video can
+            mount while the app is backgrounded (a generation that finished
+            while the phone was locked/away, now recovered — see
+            useComfyGeneration.ts), so autoplaying WITH sound would mean audio
+            blasting out of a phone the user isn't even looking at. */}
+        <video ref={videoRef} className="result-video" src={result.url} controls autoPlay muted loop playsInline />
       </div>
     )
   }
@@ -70,6 +87,7 @@ export function StatusPanel({
       ? Math.round((executedNodeCount / totalNodeCount) * 100)
       : 0
   const etaLabel = formatEta(eta)
+  const wsLabel = wsStatusLabel(wsStatus)
 
   return (
     <div className="status-panel">
@@ -79,20 +97,32 @@ export function StatusPanel({
         <div className="status-warning">⚠ ComfyUI'ye ulaşılamıyor — sunucu kapalı veya çökmüş olabilir. Yeniden denenmeye devam ediliyor…</div>
       )}
 
-      <div className="status-stage">
-        {isSampling ? (
-          <>
-            Sampling {samplingProgress.value} / {samplingProgress.max}
-          </>
-        ) : (
-          currentNodeTitle && <>İşleniyor: {currentNodeTitle}</>
-        )}
-      </div>
+      {/* No fine-grained progress survives a page reload (screen lock, OEM
+          background kill, refresh) — a recovered job only knows *that* it's
+          running, not which node or sampling step it's on. Showing a fake 0%
+          bar here would look like a stalled/broken generation, so this shows
+          a neutral message instead until a live WS update (or completion)
+          arrives. */}
+      {recovering ? (
+        <div className="status-stage">Üretim arka planda devam ediyor — ilerleme bilgisi yeniden bağlanınca gelecek…</div>
+      ) : (
+        <>
+          <div className="status-stage">
+            {isSampling ? (
+              <>
+                Sampling {samplingProgress.value} / {samplingProgress.max}
+              </>
+            ) : (
+              currentNodeTitle && <>İşleniyor: {currentNodeTitle}</>
+            )}
+          </div>
 
-      <div className="progress-bar">
-        <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="status-row status-row-right">{pct}%</div>
+          <div className="progress-bar">
+            <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
+          </div>
+          <div className="status-row status-row-right">{pct}%</div>
+        </>
+      )}
 
       <div className="status-row">
         <span>Geçen süre</span>
@@ -104,6 +134,7 @@ export function StatusPanel({
           <span>{etaLabel}</span>
         </div>
       )}
+      {wsLabel && <div className="field-hint">{wsLabel}</div>}
 
       <button type="button" className="generate-button generate-button-cancel" onClick={onCancel}>
         İptal Et

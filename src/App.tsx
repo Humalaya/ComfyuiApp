@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ImageUploader } from './components/ImageUploader'
+import { NumberField } from './components/NumberField'
 import { ImportPngButton } from './components/ImportPngButton'
 import { LoraList } from './components/LoraList'
 import { StatusPanel } from './components/StatusPanel'
@@ -7,6 +8,7 @@ import { Gallery } from './components/Gallery'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
 import { getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
+import { loadSettings, saveSettings } from './storage/settingsStorage'
 
 type Tab = 'create' | 'gallery'
 
@@ -16,12 +18,28 @@ function randomSeed() {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('create')
-  const [settings, setSettings] = useState<GenerationSettings>(() => ({ ...getDefaultSettings(), seed: randomSeed() }))
+  // Restores whatever was last saved (prompt, seed, model, LoRAs, input
+  // image reference, ...) so a reload — screen lock, OEM background kill,
+  // manual refresh — doesn't wipe the form back to scratch. Only a true
+  // first-ever launch (nothing saved yet) falls back to the workflow
+  // template's defaults, and only then does the seed get randomized — once
+  // something is saved, the seed is whatever the user left it at, same as
+  // every other field.
+  const [settings, setSettings] = useState<GenerationSettings>(() => loadSettings() ?? { ...getDefaultSettings(), seed: randomSeed() })
   const [queue, setQueue] = useState<GenerationSettings[]>([])
   const objectInfo = useObjectInfo()
   const gen = useComfyGeneration()
 
   const isBusy = gen.status === 'queued' || gen.status === 'running'
+
+  // Debounced so rapid-fire changes (typing in the prompt textarea) don't
+  // hit localStorage on every keystroke — a few hundred ms of lag before a
+  // reload would recover the very latest keystroke is an acceptable
+  // trade-off for not writing on every single one.
+  useEffect(() => {
+    const timer = setTimeout(() => saveSettings(settings), 400)
+    return () => clearTimeout(timer)
+  }, [settings])
 
   // Drains the queue one item at a time: the moment the active generation
   // reaches a terminal state — done, errored, or manually cancelled (which
@@ -198,14 +216,7 @@ export default function App() {
         <div className="field-row">
           <div className="field">
             <label className="field-label">Megapiksel</label>
-            <input
-              type="number"
-              min={0.1}
-              max={4}
-              step={0.1}
-              value={settings.megapixels}
-              onChange={(e) => update('megapixels', Number(e.target.value))}
-            />
+            <NumberField min={0.1} max={4} step={0.1} value={settings.megapixels} onChange={(v) => update('megapixels', v)} />
           </div>
           <div className="field">
             <label className="field-label">Adım Sayısı</label>
@@ -265,6 +276,8 @@ export default function App() {
           error={gen.error}
           result={gen.result}
           connectionLost={gen.connectionLost}
+          recovering={gen.recovering}
+          wsStatus={gen.wsStatus}
           onCancel={() => gen.cancel()}
         />
       </main>

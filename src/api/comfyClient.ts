@@ -150,24 +150,66 @@ export type ComfyWsMessage =
   | { type: 'execution_error'; data: { prompt_id: string; exception_message?: string } }
   | { type: 'execution_cached'; data: { nodes: string[]; prompt_id: string } }
 
-const WS_RECONNECT_DELAY_MS = 2000
+const WS_RECONNECT_BASE_MS = 1000
+const WS_RECONNECT_MAX_MS = 30000
+
+// 'reconnecting' covers both "actively waiting on a backoff timer" and
+// "offline, waiting for the browser to tell us we're back" — the UI treats
+// both the same way (don't panic, don't show fake progress, just wait).
+export type ComfyConnectionStatus = 'connecting' | 'open' | 'reconnecting'
 
 // Mobile browsers routinely drop the underlying TCP connection when the
 // screen locks or the tab is backgrounded (and plain WiFi/NAT hiccups can do
-// the same even in the foreground) — without reconnecting, a single drop
-// meant this app never received another progress/executing message for the
-// rest of the page's lifetime. This keeps retrying until it's told to stop,
-// so live progress resumes as soon as connectivity comes back; it's not the
-// only safety net (useComfyGeneration also polls /history independently),
-// but it's what makes the live "which step is running" display recover
-// instead of going silent forever after the first drop.
-export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void): () => void {
+// the same even in the foreground) — a dropped connection (ECONNRESET on the
+// Vite proxy's side, visible in its terminal) is a normal, expected event
+// here, not a bug: this reconnects with exponential backoff (capped, so a
+// dead network doesn't cause a tight retry loop) and additionally forces an
+// immediate reconnect attempt on 'visibilitychange' (tab/app foregrounded)
+// and the 'online' event, since waiting out a stale backoff timer after
+// coming back is a worse experience than just trying right away. connect()
+// and forceReconnectNow() both check the current socket state first, so a
+// foreground event never opens a second socket on top of one that's already
+// open or mid-handshake.
+//
+// This is not the only safety net — useComfyGeneration also independently
+// polls /history and treats that (not the WS) as the source of truth for
+// whether a generation actually finished, per the architecture note in
+// useComfyGeneration.ts. This function is only responsible for live
+// progress and for not doing anything alarming when the network hiccups.
+export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void, onStatusChange?: (status: ComfyConnectionStatus) => void): () => void {
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = WS_RECONNECT_BASE_MS
   let stopped = false
+  let offline = typeof navigator !== 'undefined' && navigator.onLine === false
+
+  function setStatus(status: ComfyConnectionStatus) {
+    onStatusChange?.(status)
+  }
+
+  function scheduleReconnect() {
+    if (stopped || reconnectTimer !== null || offline) return
+    setStatus('reconnecting')
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      connect()
+    }, reconnectDelay)
+    reconnectDelay = Math.min(reconnectDelay * 2, WS_RECONNECT_MAX_MS)
+  }
 
   function connect() {
+    if (stopped || offline) return
+    // Never open a second socket on top of one that's already open or
+    // mid-handshake (this is what a foreground/online event could otherwise
+    // race with a pending reconnect attempt into doing).
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+
+    setStatus('connecting')
     ws = new WebSocket(`${WS_BASE}?clientId=${clientId}`)
+    ws.onopen = () => {
+      reconnectDelay = WS_RECONNECT_BASE_MS
+      setStatus('open')
+    }
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') return
       try {
@@ -179,17 +221,56 @@ export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void): ()
     }
     ws.onclose = () => {
       if (stopped) return
-      reconnectTimer = setTimeout(connect, WS_RECONNECT_DELAY_MS)
+      scheduleReconnect()
     }
     ws.onerror = () => {
       ws?.close() // ensures onclose (and therefore the reconnect scheduling) always runs
     }
   }
 
+  // Cuts a pending backoff wait short — used when we have a real signal
+  // (tab foregrounded, browser says we're back online) that now is a good
+  // time to try again, rather than whatever arbitrary delay was left.
+  function forceReconnectNow() {
+    if (stopped || offline) return
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    reconnectDelay = WS_RECONNECT_BASE_MS
+    connect()
+  }
+
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible') forceReconnectNow()
+  }
+  function onOnline() {
+    offline = false
+    forceReconnectNow()
+  }
+  function onOffline() {
+    // No point burning battery retrying a socket while the browser itself
+    // reports no network — wait for the 'online' event instead.
+    offline = true
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    setStatus('reconnecting')
+  }
+
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('online', onOnline)
+  window.addEventListener('offline', onOffline)
+
   connect()
 
   return () => {
     stopped = true
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+    window.removeEventListener('online', onOnline)
+    window.removeEventListener('offline', onOffline)
     if (reconnectTimer !== null) clearTimeout(reconnectTimer)
     ws?.close()
   }

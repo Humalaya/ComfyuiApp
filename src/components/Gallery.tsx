@@ -39,7 +39,13 @@ export function Gallery({ onSendToCreate }: Props) {
   const [source, setSource] = useState('comfyui')
   const [currentPath, setCurrentPath] = useState('')
   const { folders, items, loading, error, refresh } = useOutputBrowser(source, currentPath)
-  const [activeItem, setActiveItem] = useState<OutputFile | null>(null)
+  // An index into `items` rather than the item itself — that's what makes
+  // "next"/"previous" a one-line index +/- 1 instead of having to search the
+  // list every time. `items` already holds the whole folder's listing (see
+  // useOutputBrowser.ts), not just the paginated slice rendered as tiles, so
+  // navigating past what's currently on screen still works.
+  const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const activeItem = activeIndex !== null ? (items[activeIndex] ?? null) : null
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [metadata, setMetadata] = useState<MetadataState | null>(null)
   const [metadataLoadingName, setMetadataLoadingName] = useState<string | null>(null)
@@ -54,6 +60,7 @@ export function Gallery({ onSendToCreate }: Props) {
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE)
+    setActiveIndex(null) // a different folder/source means `items` is about to point at something else entirely
   }, [source, currentPath])
 
   function switchSource(id: string) {
@@ -190,7 +197,7 @@ export function Gallery({ onSendToCreate }: Props) {
 
       <div className="gallery-grid">
         {visibleFiles.map((item) => (
-          <div key={item.name} className="gallery-tile" onClick={() => setActiveItem(item)}>
+          <div key={item.name} className="gallery-tile" onClick={() => setActiveIndex(items.indexOf(item))}>
             <div className="gallery-thumb-wrap">
               {item.type === 'image' ? (
                 <img className="gallery-thumb" src={outputThumbnailUrl(source, item.name)} alt={item.name} loading="lazy" />
@@ -242,7 +249,15 @@ export function Gallery({ onSendToCreate }: Props) {
         </button>
       )}
 
-      <FullscreenViewer source={source} item={activeItem} onClose={() => setActiveItem(null)} />
+      <FullscreenViewer
+        source={source}
+        item={activeItem}
+        hasPrev={activeIndex !== null && activeIndex > 0}
+        hasNext={activeIndex !== null && activeIndex < items.length - 1}
+        onPrev={() => setActiveIndex((i) => (i !== null && i > 0 ? i - 1 : i))}
+        onNext={() => setActiveIndex((i) => (i !== null && i < items.length - 1 ? i + 1 : i))}
+        onClose={() => setActiveIndex(null)}
+      />
       <MetadataModal
         title={metadata?.title ?? null}
         text={metadata?.text ?? null}

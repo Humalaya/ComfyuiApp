@@ -6,6 +6,7 @@ import {
   interrupt,
   queuePrompt,
   viewUrl,
+  type ComfyConnectionStatus,
   type ComfyWorkflow,
   type ComfyWsMessage,
   type HistoryEntry,
@@ -14,6 +15,7 @@ import {
 import { buildWorkflow, VIDEO_OUTPUT_NODE_ID, type GenerationSettings } from '../workflow/fieldMap'
 import { startKeepAlive, stopKeepAlive } from '../native/keepAlive'
 import { notify } from '../native/notifications'
+import { clearActiveJob, loadActiveJob, saveActiveJob } from '../storage/jobStorage'
 
 export type GenerationStatus = 'idle' | 'queued' | 'running' | 'done' | 'error'
 
@@ -50,6 +52,14 @@ interface GenerationState {
   // dropped request. Purely informational (the poll keeps retrying either
   // way); this only drives the in-app warning shown while the screen is on.
   connectionLost: boolean
+  // True right after a job was resumed from storage on page load — we know
+  // *that* a generation is running (recovered from a persisted prompt_id,
+  // see jobStorage.ts) but not the fine-grained per-node progress, since
+  // that only ever lived in memory and didn't survive the reload. Showing a
+  // fake 0% bar here would be misleading, so the UI shows a neutral
+  // "reconnecting" message instead until either a live WS update arrives or
+  // the /history poll finds it already finished.
+  recovering: boolean
 }
 
 const initialState: GenerationState = {
@@ -65,6 +75,7 @@ const initialState: GenerationState = {
   error: null,
   result: null,
   connectionLost: false,
+  recovering: false,
 }
 
 // How many consecutive failed /history polls (5s apart, see HISTORY_POLL_MS)
@@ -99,6 +110,13 @@ function computeEta(progress: SamplingProgress | null, phaseStart: number | null
 
 export function useComfyGeneration() {
   const [state, setState] = useState<GenerationState>(initialState)
+  // Kept separate from GenerationState (rather than a field on it) because
+  // every terminal transition (done/error/reset/cancel) replaces the whole
+  // state with `{ ...initialState, ... }` — folding this in would mean that
+  // every one of those spots would need to remember to carry it forward, and
+  // "wsStatus resets to 'connecting' just because a generation finished" is
+  // wrong (the socket itself didn't go anywhere).
+  const [wsStatus, setWsStatus] = useState<ComfyConnectionStatus>('connecting')
 
   const activePromptId = useRef<string | null>(null)
   const nodeTitles = useRef<Record<string, string>>({})
@@ -131,6 +149,7 @@ export function useComfyGeneration() {
       activePromptId.current = null
       stopTicking()
       stopKeepAlive()
+      clearActiveJob()
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
       const file = extractVideoFile(entry.outputs)
       if (file) {
@@ -185,67 +204,80 @@ export function useComfyGeneration() {
   }, [pollHistoryOnce])
 
   useEffect(() => {
-    const disconnect = connectComfySocket((msg: ComfyWsMessage) => {
-      const promptId = activePromptId.current
-      if (!promptId) return
+    const disconnect = connectComfySocket(
+      (msg: ComfyWsMessage) => {
+        const promptId = activePromptId.current
+        if (!promptId) return
 
-      if (msg.type === 'progress' && msg.data.prompt_id === promptId) {
-        if (samplingPhaseStart.current === null) samplingPhaseStart.current = Date.now()
-        const progress = { value: msg.data.value, max: msg.data.max }
-        setState((s) => ({ ...s, status: 'running', samplingProgress: progress, eta: computeEta(progress, samplingPhaseStart.current) }))
-      } else if (msg.type === 'execution_cached' && msg.data.prompt_id === promptId) {
-        // These nodes are skipped (inputs unchanged from a previous run) but
-        // are still "done" for progress-counting purposes — without this the
-        // overall progress bar looked stuck near 0% on a mostly-cached run.
-        for (const nodeId of msg.data.nodes) executedNodeIds.current.add(nodeId)
-        setState((s) => ({ ...s, status: 'running', executedNodeCount: executedNodeIds.current.size }))
-      } else if (msg.type === 'executing' && msg.data.prompt_id === promptId) {
-        if (msg.data.node === null) {
-          getHistory(promptId)
-            .then((history) => {
-              const entry = history[promptId]
-              if (entry) {
-                finishFromHistory(promptId, entry)
-              } else {
-                const error = 'Çıktı bulunamadı (workflow beklenmedik şekilde sonuçlandı).'
-                activePromptId.current = null
-                stopTicking()
-                stopKeepAlive()
-                setState({ ...initialState, status: 'error', error })
-                notify('✗ Üretim hatası', error)
-              }
-            })
-            .catch((err) => {
-              const error = (err as Error).message
-              activePromptId.current = null
-              stopTicking()
-              stopKeepAlive()
-              setState({ ...initialState, status: 'error', error })
-              notify('✗ Üretim hatası', error)
-            })
-        } else {
-          const nodeId = msg.data.node
-          executedNodeIds.current.add(nodeId)
-          samplingPhaseStart.current = null // new node — any previous sampling progress no longer applies
+        if (msg.type === 'progress' && msg.data.prompt_id === promptId) {
+          if (samplingPhaseStart.current === null) samplingPhaseStart.current = Date.now()
+          const progress = { value: msg.data.value, max: msg.data.max }
           setState((s) => ({
             ...s,
             status: 'running',
-            currentNodeId: nodeId,
-            currentNodeTitle: nodeTitles.current[nodeId] ?? nodeId,
-            executedNodeCount: executedNodeIds.current.size,
-            samplingProgress: null,
-            eta: null,
+            recovering: false,
+            samplingProgress: progress,
+            eta: computeEta(progress, samplingPhaseStart.current),
           }))
+        } else if (msg.type === 'execution_cached' && msg.data.prompt_id === promptId) {
+          // These nodes are skipped (inputs unchanged from a previous run) but
+          // are still "done" for progress-counting purposes — without this the
+          // overall progress bar looked stuck near 0% on a mostly-cached run.
+          for (const nodeId of msg.data.nodes) executedNodeIds.current.add(nodeId)
+          setState((s) => ({ ...s, status: 'running', recovering: false, executedNodeCount: executedNodeIds.current.size }))
+        } else if (msg.type === 'executing' && msg.data.prompt_id === promptId) {
+          if (msg.data.node === null) {
+            getHistory(promptId)
+              .then((history) => {
+                const entry = history[promptId]
+                if (entry) {
+                  finishFromHistory(promptId, entry)
+                } else {
+                  const error = 'Çıktı bulunamadı (workflow beklenmedik şekilde sonuçlandı).'
+                  activePromptId.current = null
+                  stopTicking()
+                  stopKeepAlive()
+                  clearActiveJob()
+                  setState({ ...initialState, status: 'error', error })
+                  notify('✗ Üretim hatası', error)
+                }
+              })
+              .catch((err) => {
+                const error = (err as Error).message
+                activePromptId.current = null
+                stopTicking()
+                stopKeepAlive()
+                clearActiveJob()
+                setState({ ...initialState, status: 'error', error })
+                notify('✗ Üretim hatası', error)
+              })
+          } else {
+            const nodeId = msg.data.node
+            executedNodeIds.current.add(nodeId)
+            samplingPhaseStart.current = null // new node — any previous sampling progress no longer applies
+            setState((s) => ({
+              ...s,
+              status: 'running',
+              recovering: false,
+              currentNodeId: nodeId,
+              currentNodeTitle: nodeTitles.current[nodeId] ?? nodeId,
+              executedNodeCount: executedNodeIds.current.size,
+              samplingProgress: null,
+              eta: null,
+            }))
+          }
+        } else if (msg.type === 'execution_error' && msg.data.prompt_id === promptId) {
+          const error = msg.data.exception_message ?? 'ComfyUI çalıştırma hatası'
+          activePromptId.current = null
+          stopTicking()
+          stopKeepAlive()
+          clearActiveJob()
+          setState({ ...initialState, status: 'error', error })
+          notify('✗ Üretim hatası', error)
         }
-      } else if (msg.type === 'execution_error' && msg.data.prompt_id === promptId) {
-        const error = msg.data.exception_message ?? 'ComfyUI çalıştırma hatası'
-        activePromptId.current = null
-        stopTicking()
-        stopKeepAlive()
-        setState({ ...initialState, status: 'error', error })
-        notify('✗ Üretim hatası', error)
-      }
-    })
+      },
+      (status) => setWsStatus(status),
+    )
     return disconnect
   }, [stopTicking, finishFromHistory])
 
@@ -286,6 +318,10 @@ export function useComfyGeneration() {
           throw new Error('Workflow doğrulama hatası: ' + JSON.stringify(res.node_errors))
         }
         activePromptId.current = res.prompt_id
+        // So a page reload (screen lock, OEM background kill, manual
+        // refresh) can recover this generation instead of losing track of it
+        // entirely — see the mount-time recovery effect below.
+        saveActiveJob(res.prompt_id, startTime.current ?? Date.now())
         // Re-arm the keep-alive service now that the prompt id is known, so
         // its native poll loop can track this specific generation and still
         // notify even if the WebView gets frozen while backgrounded.
@@ -305,6 +341,7 @@ export function useComfyGeneration() {
   const reset = useCallback(() => {
     stopTicking()
     stopKeepAlive()
+    clearActiveJob()
     activePromptId.current = null
     setState(initialState)
   }, [stopTicking])
@@ -315,10 +352,63 @@ export function useComfyGeneration() {
     } finally {
       stopTicking()
       stopKeepAlive()
+      clearActiveJob()
       activePromptId.current = null
       setState(initialState)
     }
   }, [stopTicking])
 
-  return { ...state, generate, reset, cancel }
+  // Recovers a generation that was still running when the page was torn
+  // down — screen lock, OEM background kill, or a manual refresh can all
+  // wipe every bit of in-memory state (including the WS connection and
+  // these very refs) without the generation on ComfyUI's side stopping.
+  // Without this, reopening the app after that showed 'idle' with no way to
+  // find out the job ever existed, let alone whether it finished.
+  //
+  // There's no fine-grained progress to restore (that only ever lived in
+  // memory), so this intentionally does not fabricate a node count or
+  // percentage — `recovering: true` tells the UI to show a neutral
+  // "reconnecting" message instead of a misleading 0% bar until either a
+  // live WS update arrives for this prompt id or the immediate /history
+  // check below resolves it outright.
+  useEffect(() => {
+    const job = loadActiveJob()
+    if (!job) return
+
+    activePromptId.current = job.promptId
+    startTime.current = job.startedAt
+    consecutivePollFailures.current = 0
+
+    setState({
+      ...initialState,
+      status: 'running',
+      recovering: true,
+      elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)),
+    })
+    startKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: job.promptId, videoNodeId: VIDEO_OUTPUT_NODE_ID })
+
+    stopTicking()
+    tickInterval.current = setInterval(() => {
+      setState((s) => {
+        if (s.status !== 'queued' && s.status !== 'running') return s
+        return {
+          ...s,
+          elapsedSeconds: startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : s.elapsedSeconds,
+          eta: computeEta(s.samplingProgress, samplingPhaseStart.current),
+        }
+      })
+    }, 1000)
+    pollInterval.current = setInterval(() => {
+      if (activePromptId.current) pollHistoryOnce(activePromptId.current)
+    }, HISTORY_POLL_MS)
+
+    // Resolve immediately instead of waiting up to HISTORY_POLL_MS — the
+    // job may well have already finished while the page was gone.
+    pollHistoryOnce(job.promptId)
+    // Mount-only by design (recovery happens once, right after the hook is
+    // first used) — pollHistoryOnce/stopTicking are stable useCallbacks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return { ...state, wsStatus, generate, reset, cancel }
 }
