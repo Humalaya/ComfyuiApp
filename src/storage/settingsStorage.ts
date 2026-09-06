@@ -56,9 +56,9 @@ export function normalizeSettings(raw: unknown, defaults: GenerationSettings = g
     framerate: typeof r.framerate === 'number' && Number.isFinite(r.framerate) ? r.framerate : defaults.framerate,
     unetName: typeof r.unetName === 'string' ? r.unetName : defaults.unetName,
     totalSteps: typeof r.totalSteps === 'number' && Number.isFinite(r.totalSteps) ? r.totalSteps : defaults.totalSteps,
-    denoise: typeof r.denoise === 'number' && Number.isFinite(r.denoise) ? r.denoise : defaults.denoise,
     inputImage: isInputImage(r.inputImage) ? r.inputImage : defaults.inputImage,
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, LORA_SLOT_COUNT),
+    batchCount: typeof r.batchCount === 'number' && Number.isFinite(r.batchCount) ? r.batchCount : defaults.batchCount,
   }
 }
 

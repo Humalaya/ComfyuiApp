@@ -12,7 +12,6 @@ export const NODE_IDS = {
   framerate: '149',
   model: '646',
   totalSteps: '750',
-  scheduler: '124',
   inputImage: '687',
   loraLoader: '674',
 } as const
@@ -38,9 +37,15 @@ export interface GenerationSettings {
   framerate: number
   unetName: string
   totalSteps: number
-  denoise: number
   inputImage: { filename: string; subfolder: string; type: string } | null
   loras: LoraSlot[]
+  // UI-only, like fixedSeed — this workflow's MiniMaxH3ImageToVideo node has
+  // no batch_size input at all (checked via ComfyUI's own /object_info), so
+  // there's no way to make ComfyUI itself render N videos in one job. This
+  // is purely a convenience multiplier App.tsx uses to enqueue N copies (each
+  // with its own freshly-randomized seed if not fixed) instead of one —
+  // never written into the actual workflow sent to ComfyUI.
+  batchCount: number
 }
 
 export const LORA_SLOT_COUNT = 10
@@ -67,9 +72,9 @@ export function getDefaultSettings(): GenerationSettings {
     framerate: Number(t[NODE_IDS.framerate].inputs.value ?? 24),
     unetName: String(t[NODE_IDS.model].inputs.unet_name ?? ''),
     totalSteps: Number(t[NODE_IDS.totalSteps].inputs.value ?? 10),
-    denoise: Number(t[NODE_IDS.scheduler].inputs.denoise ?? 1),
     inputImage: null,
     loras: readLoraSlots(),
+    batchCount: 1,
   }
 }
 
@@ -84,7 +89,8 @@ export function buildWorkflow(settings: GenerationSettings): ComfyWorkflow {
   workflow[NODE_IDS.framerate].inputs.value = settings.framerate
   workflow[NODE_IDS.model].inputs.unet_name = settings.unetName
   workflow[NODE_IDS.totalSteps].inputs.value = settings.totalSteps
-  workflow[NODE_IDS.scheduler].inputs.denoise = settings.denoise
+  // Denoise is intentionally not user-editable — left at the workflow's own
+  // baked-in default (1, i.e. full-strength) rather than exposed in the UI.
 
   if (settings.inputImage) {
     // LoadImageCrop expects just the filename ComfyUI's /upload/image returned

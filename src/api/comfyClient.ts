@@ -84,6 +84,17 @@ export function viewUrl(filename: string, subfolder: string, type: string): stri
   return `${API_BASE}/view?${params.toString()}`
 }
 
+// rgthree-comfy's own endpoint (not core ComfyUI): serves a lora's preview
+// image if one exists alongside the .safetensors file (same basename, .png/
+// .jpg/.jpeg) — this is how rgthree's own Power Lora Loader widget shows
+// thumbnails. When there's no preview file it responds 200 with a small JSON
+// body instead of image bytes (not a real 404), so this can't be checked via
+// fetch status — callers just render it as an <img src> and handle the
+// resulting decode failure via onError instead.
+export function loraThumbnailUrl(loraName: string): string {
+  return `${API_BASE}/rgthree/api/loras/img?file=${encodeURIComponent(loraName)}`
+}
+
 export async function getHistory(promptId: string): Promise<Record<string, HistoryEntry>> {
   const res = await fetch(`${API_BASE}/history/${promptId}`)
   return asJson(res)
@@ -113,7 +124,31 @@ export interface HistoryOutputFile {
 export interface HistoryEntry {
   prompt: unknown[]
   outputs: Record<string, Record<string, HistoryOutputFile[] | unknown>>
-  status?: { completed?: boolean; status_str?: string }
+  status?: {
+    completed?: boolean
+    // 'success' | 'error' — a node throwing mid-execution shows up here as
+    // status_str: 'error' with completed staying false forever (ComfyUI
+    // never flips it to true for a failed run) — see
+    // extractHistoryErrorMessage below. A poll loop that only checks
+    // `completed` misses this entirely and polls forever with nothing to
+    // show for it.
+    status_str?: string
+    messages?: Array<[string, Record<string, unknown>]>
+  }
+}
+
+// Pulls a human-readable message out of a /history entry that failed
+// mid-execution (status_str === 'error') — the messages array carries an
+// ['execution_error', {...}] tuple with the same shape as the WebSocket's
+// own execution_error event (node_type, exception_message, ...).
+export function extractHistoryErrorMessage(entry: HistoryEntry): string {
+  const messages = entry.status?.messages ?? []
+  const errorEntry = messages.find(([type]) => type === 'execution_error')
+  const detail = errorEntry?.[1] as { node_type?: string; exception_message?: string } | undefined
+  if (detail?.exception_message) {
+    return detail.node_type ? `${detail.node_type}: ${detail.exception_message}` : detail.exception_message
+  }
+  return 'ComfyUI çalıştırma hatası'
 }
 
 export interface ObjectInfoEntry {
@@ -149,6 +184,16 @@ export type ComfyWsMessage =
   | { type: 'executed'; data: { node: string; prompt_id: string; output: unknown } }
   | { type: 'execution_error'; data: { prompt_id: string; exception_message?: string } }
   | { type: 'execution_cached'; data: { nodes: string[]; prompt_id: string } }
+  // A live, low-res snapshot of the currently-sampling (still noisy) latent,
+  // decoded server-side (ComfyUI launched with --preview-method) and pushed
+  // as a JPEG/PNG binary frame — see handleBinary below. ComfyUI's own
+  // protocol doesn't attach a prompt_id to these, so a subscriber has to
+  // gate on its own "is one of my nodes the one currently executing right
+  // now" state instead (both useComfyGeneration and useImageGeneration do
+  // this via their currentNodeId/isExecutingMine tracking). The blob URL is
+  // revoked the moment a newer frame replaces it, so don't hold onto it past
+  // the next message.
+  | { type: 'preview'; data: { url: string } }
 
 const WS_RECONNECT_BASE_MS = 1000
 const WS_RECONNECT_MAX_MS = 30000
@@ -158,73 +203,133 @@ const WS_RECONNECT_MAX_MS = 30000
 // both the same way (don't panic, don't show fake progress, just wait).
 export type ComfyConnectionStatus = 'connecting' | 'open' | 'reconnecting'
 
-// Mobile browsers routinely drop the underlying TCP connection when the
-// screen locks or the tab is backgrounded (and plain WiFi/NAT hiccups can do
-// the same even in the foreground) — a dropped connection (ECONNRESET on the
-// Vite proxy's side, visible in its terminal) is a normal, expected event
-// here, not a bug: this reconnects with exponential backoff (capped, so a
-// dead network doesn't cause a tight retry loop) and additionally forces an
-// immediate reconnect attempt on 'visibilitychange' (tab/app foregrounded)
-// and the 'online' event, since waiting out a stale backoff timer after
-// coming back is a worse experience than just trying right away. connect()
-// and forceReconnectNow() both check the current socket state first, so a
-// foreground event never opens a second socket on top of one that's already
-// open or mid-handshake.
-//
-// This is not the only safety net — useComfyGeneration also independently
-// polls /history and treats that (not the WS) as the source of truth for
-// whether a generation actually finished, per the architecture note in
-// useComfyGeneration.ts. This function is only responsible for live
-// progress and for not doing anything alarming when the network hiccups.
-export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void, onStatusChange?: (status: ComfyConnectionStatus) => void): () => void {
-  let ws: WebSocket | null = null
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let reconnectDelay = WS_RECONNECT_BASE_MS
-  let stopped = false
-  let offline = typeof navigator !== 'undefined' && navigator.onLine === false
+interface ComfySocketSubscriber {
+  onMessage: (msg: ComfyWsMessage) => void
+  onStatusChange?: (status: ComfyConnectionStatus) => void
+}
+
+interface ComfySocketManager {
+  ws: WebSocket | null
+  reconnectTimer: ReturnType<typeof setTimeout> | null
+  reconnectDelay: number
+  stopped: boolean
+  offline: boolean
+  subscribers: Set<ComfySocketSubscriber>
+  lastPreviewUrl: string | null
+}
+
+// A single real WebSocket, shared by every subscriber — video's generation
+// hook and every image-generation hook instance (SDXL, Krea2, ...) all want
+// live progress/preview at once now, but ComfyUI keys its server-side socket
+// registry by the `clientId` query param itself, not a fresh id per TCP
+// connection: a second `new WebSocket(...)` opened with the same clientId
+// silently steals delivery out from under the first (the server just
+// overwrites its sockets[clientId] entry), so independent hooks each running
+// their own connect-on-mount effect would race to "own" the one real
+// connection instead of all seeing the same messages. This module-level
+// singleton keeps exactly one socket alive and fans every message out to
+// however many subscribers currently want it.
+let manager: ComfySocketManager | null = null
+
+function getManager(): ComfySocketManager {
+  if (manager) return manager
+
+  const m: ComfySocketManager = {
+    ws: null,
+    reconnectTimer: null,
+    reconnectDelay: WS_RECONNECT_BASE_MS,
+    stopped: false,
+    offline: typeof navigator !== 'undefined' && navigator.onLine === false,
+    subscribers: new Set(),
+    lastPreviewUrl: null,
+  }
+  manager = m
 
   function setStatus(status: ComfyConnectionStatus) {
-    onStatusChange?.(status)
+    for (const sub of m.subscribers) sub.onStatusChange?.(status)
+  }
+
+  function broadcast(msg: ComfyWsMessage) {
+    for (const sub of m.subscribers) sub.onMessage(msg)
+  }
+
+  // ComfyUI's binary preview frame: a 4-byte big-endian event type (1 =
+  // PREVIEW_IMAGE — the only one that matters here), a 4-byte big-endian
+  // image format tag (1 = JPEG, 2 = PNG), then the raw encoded image bytes.
+  function handleBinary(buf: ArrayBuffer) {
+    if (buf.byteLength < 8) return
+    const view = new DataView(buf)
+    const eventType = view.getUint32(0, false)
+    if (eventType !== 1) return
+    const imgType = view.getUint32(4, false)
+    const mime = imgType === 2 ? 'image/png' : 'image/jpeg'
+    const blob = new Blob([buf.slice(8)], { type: mime })
+    // Only ever one live frame worth keeping around at a time — revoke the
+    // previous one immediately so these don't pile up in memory over a long
+    // generation with hundreds of steps.
+    if (m.lastPreviewUrl) URL.revokeObjectURL(m.lastPreviewUrl)
+    m.lastPreviewUrl = URL.createObjectURL(blob)
+    broadcast({ type: 'preview', data: { url: m.lastPreviewUrl } })
   }
 
   function scheduleReconnect() {
-    if (stopped || reconnectTimer !== null || offline) return
+    if (m.stopped || m.reconnectTimer !== null || m.offline) return
     setStatus('reconnecting')
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null
+    m.reconnectTimer = setTimeout(() => {
+      m.reconnectTimer = null
       connect()
-    }, reconnectDelay)
-    reconnectDelay = Math.min(reconnectDelay * 2, WS_RECONNECT_MAX_MS)
+    }, m.reconnectDelay)
+    m.reconnectDelay = Math.min(m.reconnectDelay * 2, WS_RECONNECT_MAX_MS)
   }
 
+  // Mobile browsers routinely drop the underlying TCP connection when the
+  // screen locks or the tab is backgrounded (and plain WiFi/NAT hiccups can
+  // do the same even in the foreground) — a dropped connection (ECONNRESET
+  // on the Vite proxy's side, visible in its terminal) is a normal, expected
+  // event here, not a bug: this reconnects with exponential backoff (capped,
+  // so a dead network doesn't cause a tight retry loop) and additionally
+  // forces an immediate reconnect attempt on 'visibilitychange' (tab/app
+  // foregrounded) and the 'online' event, since waiting out a stale backoff
+  // timer after coming back is a worse experience than just trying right
+  // away. connect() and forceReconnectNow() both check the current socket
+  // state first, so a foreground event never opens a second socket on top of
+  // one that's already open or mid-handshake.
+  //
+  // This is not the only safety net — useComfyGeneration/useImageGeneration
+  // also independently poll /history and treat that (not the WS) as the
+  // source of truth for whether a generation actually finished. This is only
+  // responsible for live progress/preview and for not doing anything
+  // alarming when the network hiccups.
   function connect() {
-    if (stopped || offline) return
-    // Never open a second socket on top of one that's already open or
-    // mid-handshake (this is what a foreground/online event could otherwise
-    // race with a pending reconnect attempt into doing).
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+    if (m.stopped || m.offline) return
+    if (m.ws && (m.ws.readyState === WebSocket.OPEN || m.ws.readyState === WebSocket.CONNECTING)) return
 
     setStatus('connecting')
-    ws = new WebSocket(`${WS_BASE}?clientId=${clientId}`)
+    const ws = new WebSocket(`${WS_BASE}?clientId=${clientId}`)
+    ws.binaryType = 'arraybuffer'
+    m.ws = ws
     ws.onopen = () => {
-      reconnectDelay = WS_RECONNECT_BASE_MS
+      m.reconnectDelay = WS_RECONNECT_BASE_MS
       setStatus('open')
     }
     ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        handleBinary(ev.data)
+        return
+      }
       if (typeof ev.data !== 'string') return
       try {
-        const msg = JSON.parse(ev.data) as ComfyWsMessage
-        onMessage(msg)
+        broadcast(JSON.parse(ev.data) as ComfyWsMessage)
       } catch {
-        // ignore non-JSON (binary preview frames etc.)
+        // ignore malformed frames
       }
     }
     ws.onclose = () => {
-      if (stopped) return
+      if (m.stopped) return
       scheduleReconnect()
     }
     ws.onerror = () => {
-      ws?.close() // ensures onclose (and therefore the reconnect scheduling) always runs
+      ws.close() // ensures onclose (and therefore the reconnect scheduling) always runs
     }
   }
 
@@ -232,13 +337,13 @@ export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void, onS
   // (tab foregrounded, browser says we're back online) that now is a good
   // time to try again, rather than whatever arbitrary delay was left.
   function forceReconnectNow() {
-    if (stopped || offline) return
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
-    if (reconnectTimer !== null) {
-      clearTimeout(reconnectTimer)
-      reconnectTimer = null
+    if (m.stopped || m.offline) return
+    if (m.ws && (m.ws.readyState === WebSocket.OPEN || m.ws.readyState === WebSocket.CONNECTING)) return
+    if (m.reconnectTimer !== null) {
+      clearTimeout(m.reconnectTimer)
+      m.reconnectTimer = null
     }
-    reconnectDelay = WS_RECONNECT_BASE_MS
+    m.reconnectDelay = WS_RECONNECT_BASE_MS
     connect()
   }
 
@@ -246,16 +351,16 @@ export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void, onS
     if (document.visibilityState === 'visible') forceReconnectNow()
   }
   function onOnline() {
-    offline = false
+    m.offline = false
     forceReconnectNow()
   }
   function onOffline() {
     // No point burning battery retrying a socket while the browser itself
     // reports no network — wait for the 'online' event instead.
-    offline = true
-    if (reconnectTimer !== null) {
-      clearTimeout(reconnectTimer)
-      reconnectTimer = null
+    m.offline = true
+    if (m.reconnectTimer !== null) {
+      clearTimeout(m.reconnectTimer)
+      m.reconnectTimer = null
     }
     setStatus('reconnecting')
   }
@@ -266,12 +371,24 @@ export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void, onS
 
   connect()
 
+  return m
+}
+
+// Subscribes to the one shared ComfyUI WebSocket connection (see getManager
+// above) — safe to call from as many hook instances as are mounted at once,
+// each gets every message. Returns an unsubscribe function; the underlying
+// connection itself is deliberately never torn down on unsubscribe (this
+// app never unmounts its generation tabs, so there's nothing to gain from
+// closing and reopening it) — only delivery to this particular caller stops.
+export function connectComfySocket(onMessage: (msg: ComfyWsMessage) => void, onStatusChange?: (status: ComfyConnectionStatus) => void): () => void {
+  const m = getManager()
+  const sub: ComfySocketSubscriber = { onMessage, onStatusChange }
+  m.subscribers.add(sub)
+  // A subscriber joining after the shared socket is already open (or still
+  // connecting) would otherwise never hear about that — the status change
+  // that got it there already fired for whoever was subscribed at the time.
+  onStatusChange?.(m.ws?.readyState === WebSocket.OPEN ? 'open' : 'connecting')
   return () => {
-    stopped = true
-    document.removeEventListener('visibilitychange', onVisibilityChange)
-    window.removeEventListener('online', onOnline)
-    window.removeEventListener('offline', onOffline)
-    if (reconnectTimer !== null) clearTimeout(reconnectTimer)
-    ws?.close()
+    m.subscribers.delete(sub)
   }
 }

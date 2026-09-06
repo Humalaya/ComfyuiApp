@@ -1,0 +1,335 @@
+{
+  "43": {
+    "inputs": {
+      "randomize_percent": 50,
+      "auto_strength_factor": 1,
+      "strength": 20,
+      "noise_insert": "noise on beginning steps",
+      "steps_switchover_percent": 25,
+      "seed": 600639181449767,
+      "mask_starts_at": "beginning",
+      "mask_percent": 0,
+      "log_to_console": false,
+      "noise_distribution": "uniform",
+      "granularity": "values",
+      "conditioning": [
+        "91:104",
+        0
+      ]
+    },
+    "class_type": "KreaSeedVarianceEnhancer",
+    "_meta": {
+      "title": "Seed Variance Enhancer - Krea 2 Turbo"
+    }
+  },
+  "112": {
+    "inputs": {
+      "filename_prefix": "krea/%year%-%month%-%day%/Krea2",
+      "images": [
+        "91:94",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "113": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "Krea/Krea2_TextFusion_Refusal_Reduction.safetensors",
+        "strength": 1
+      },
+      "lora_2": {
+        "on": true,
+        "lora": "Krea/RawGirlV3.safetensors",
+        "strength": 1
+      },
+      "lora_3": {
+        "on": true,
+        "lora": "Krea/krea2filterbypass3.safetensors",
+        "strength": 1
+      },
+      "lora_4": {
+        "on": true,
+        "lora": "Krea/realism_engine_krea2_v3.1.safetensors",
+        "strength": 1
+      },
+      "lora_5": {
+        "on": true,
+        "lora": "Krea/snofs_krea_v1_3.safetensors",
+        "strength": 1
+      },
+      "lora_6": {
+        "on": true,
+        "lora": "Krea2/Casting_Krea2.safetensors",
+        "strength": 1
+      },
+      "lora_7": {
+        "on": true,
+        "lora": "Krea2/KNP_V2_copy_copy.safetensors",
+        "strength": 1
+      },
+      "lora_8": {
+        "on": true,
+        "lora": "Krea2/Krea2-realism-V2.safetensors",
+        "strength": 1
+      },
+      "lora_9": {
+        "on": true,
+        "lora": "Krea2/Krea-2-Turbo-Projector-Scale-LoRA-Diffusers.safetensors",
+        "strength": 1
+      },
+      "lora_10": {
+        "on": true,
+        "lora": "Krea2/Krea2Pussy.safetensors",
+        "strength": 1
+      },
+      "lora_11": {
+        "on": true,
+        "lora": "Krea2/MysticXXX_KREA2_v3.safetensors",
+        "strength": 1
+      },
+      "lora_12": {
+        "on": true,
+        "lora": "Krea2/Playboy-1950s-krea2-v1_000002000.safetensors",
+        "strength": 1
+      },
+      "lora_13": {
+        "on": true,
+        "lora": "Krea2/age_krea2_loraholic.safetensors",
+        "strength": 1
+      },
+      "lora_14": {
+        "on": true,
+        "lora": "Krea2/anal_helper_krea2_loraholic.safetensors",
+        "strength": 1
+      },
+      "lora_15": {
+        "on": true,
+        "lora": "Krea2/ass_krea2_loraholic.safetensors",
+        "strength": 1
+      },
+      "lora_16": {
+        "on": true,
+        "lora": "Krea2/breast_size_krea2_loraholic.safetensors",
+        "strength": 1
+      },
+      "lora_17": {
+        "on": true,
+        "lora": "Krea2/krea2_better_pussy_poses_v1.0.safetensors",
+        "strength": 1
+      },
+      "lora_18": {
+        "on": true,
+        "lora": "Krea2/nsfw.safetensors",
+        "strength": 1
+      },
+      "lora_19": {
+        "on": true,
+        "lora": "Krea2/real_3d_krea2_loraholic.safetensors",
+        "strength": 1
+      },
+      "lora_20": {
+        "on": true,
+        "lora": "Krea2/skindetails_mild_loraholic.safetensors",
+        "strength": 1
+      },
+      "lora_21": {
+        "on": true,
+        "lora": "Krea2/skintone_krea2_loraholic.safetensors",
+        "strength": 1
+      },
+      "lora_22": {
+        "on": true,
+        "lora": "Utility/Detailer_-_Krea2_project.safetensors",
+        "strength": 1
+      },
+      "â Add Lora": "",
+      "model": [
+        "91:100",
+        0
+      ],
+      "clip": [
+        "91:92",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "91:92": {
+    "inputs": {
+      "clip_name": "image/qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "91:93": {
+    "inputs": {
+      "width": 1440,
+      "height": 1920,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "91:99": {
+    "inputs": {
+      "vae_name": "image/qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "91:104": {
+    "inputs": {
+      "text": "masterpiece, best quality, amazing quality, absurdres,\n1girl, solo, portrait,",
+      "clip": [
+        "113",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "91:96": {
+    "inputs": {
+      "text": "bad quality, worst quality, worst detail, sketch, bad hands, bad anatomy, extra fingers, deformed, artist name, watermark, signature, patreon, twitter username",
+      "clip": [
+        "113",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "91:100": {
+    "inputs": {
+      "unet_name": "Image/krea2TurboOfficialComfy_krea2TurboFp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "91:94": {
+    "inputs": {
+      "samples": [
+        "91:109",
+        0
+      ],
+      "vae": [
+        "91:99",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "91:101": {
+    "inputs": {
+      "samples": [
+        "91:108",
+        0
+      ],
+      "vae": [
+        "91:99",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "91:108": {
+    "inputs": {
+      "eta": 0.5,
+      "sampler_name": "linear/euler",
+      "scheduler": "beta",
+      "steps": 12,
+      "steps_to_run": -1,
+      "denoise": 1,
+      "cfg": 1,
+      "seed": 397789567692071,
+      "sampler_mode": "standard",
+      "bongmath": true,
+      "positive": [
+        "43",
+        0
+      ],
+      "negative": [
+        "91:96",
+        0
+      ],
+      "latent_image": [
+        "91:93",
+        0
+      ],
+      "model": [
+        "113",
+        0
+      ]
+    },
+    "class_type": "ClownsharKSampler_Beta",
+    "_meta": {
+      "title": "ClownsharKSampler (Pass 1)"
+    }
+  },
+  "91:109": {
+    "inputs": {
+      "eta": 0.5,
+      "sampler_name": "exponential/res_4s_munthe-kaas",
+      "scheduler": "kl_optimal",
+      "steps": 3,
+      "steps_to_run": -1,
+      "denoise": 0.27,
+      "cfg": 1,
+      "seed": 12345454,
+      "sampler_mode": "standard",
+      "bongmath": true,
+      "positive": [
+        "91:104",
+        0
+      ],
+      "negative": [
+        "91:96",
+        0
+      ],
+      "latent_image": [
+        "91:108",
+        0
+      ],
+      "model": [
+        "113",
+        0
+      ]
+    },
+    "class_type": "ClownsharKSampler_Beta",
+    "_meta": {
+      "title": "ClownsharKSampler (Pass 2)"
+    }
+  }
+}

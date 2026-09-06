@@ -4,26 +4,46 @@ import { NumberField } from './components/NumberField'
 import { ImportPngButton } from './components/ImportPngButton'
 import { LoraList } from './components/LoraList'
 import { StatusPanel } from './components/StatusPanel'
+import { GenerationFullscreenViewer } from './components/GenerationFullscreenViewer'
 import { Gallery } from './components/Gallery'
+import { ImageGenerateTab } from './components/ImageGenerateTab'
+import { Krea2GenerateTab } from './components/Krea2GenerateTab'
 import { useObjectInfo } from './hooks/useObjectInfo'
-import { useComfyGeneration, type GenerationResult } from './hooks/useComfyGeneration'
+import { useComfyGeneration } from './hooks/useComfyGeneration'
 import { getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
 import { loadSettings, saveSettings } from './storage/settingsStorage'
 import { loadQueue, saveQueue } from './storage/queueStorage'
 
-// Kept small on purpose — this is just a "what finished recently" log so a
-// batch's earlier results stay visible after the queue moves on (see the
-// completedResults state below), not a real history feature.
+// Kept small on purpose — not a real history feature, just enough of a
+// "what finished recently" trail for GenerationFullscreenViewer to swipe
+// through (see completedResults below and its viewerItems derivation).
 const MAX_COMPLETED_RESULTS = 20
 
-type Tab = 'create' | 'gallery'
+// One flat entry per *file*, not per job — a batchCount job still finishes
+// as a single gen.result, but that result can itself carry several urls
+// (Batch Size > 1), each becoming its own entry here in the same order. Only
+// the current job's own files are ever shown inline (via ResultCarousel in
+// StatusPanel.tsx) — this array exists purely so tapping one opens
+// GenerationFullscreenViewer with the rest of the session's history to swipe
+// through, generation continuing in the background regardless.
+interface CompletedItem {
+  promptId: string
+  url: string
+  createdAt: number
+}
+
+// 'image' first/default per "image generation ana ekran olacak" — video
+// generation (txt2vid/img2vid, see ImageUploader.tsx) and the gallery are
+// both still one tap away.
+type Tab = 'image' | 'video' | 'gallery'
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000_000)
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('create')
+  const [tab, setTab] = useState<Tab>('image')
+  const [imageModel, setImageModel] = useState<'sdxl' | 'krea2'>('sdxl')
   // Restores whatever was last saved (prompt, seed, model, LoRAs, input
   // image reference, ...) so a reload — screen lock, OEM background kill,
   // manual refresh — doesn't wipe the form back to scratch. Only a true
@@ -46,7 +66,15 @@ export default function App() {
   // whole session is closed. Not persisted: it's a convenience log, not a
   // record of truth (the actual files are already safe on ComfyUI's disk,
   // browsable in Galeri).
-  const [completedResults, setCompletedResults] = useState<GenerationResult[]>([])
+  const [completedResults, setCompletedResults] = useState<CompletedItem[]>([])
+  // The url of the item GenerationFullscreenViewer has open — null means
+  // closed. Tracked by url rather than a plain index into completedResults:
+  // a new job can finish (and get unshifted onto the front of that array)
+  // while the viewer is still open, since it's a pure display layer that
+  // never pauses generation — a plain index would then silently point at a
+  // different, newer item the moment that happened. The url stays valid
+  // regardless of how the array shifts around it.
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   // Set when the queue stops itself after a *pre-flight* failure (ComfyUI
   // never even accepted the prompt — almost always means it's unreachable,
   // not that this specific job was bad) instead of continuing to drain. See
@@ -126,7 +154,9 @@ export default function App() {
     lastDrainedKey.current = key
 
     if (gen.status === 'done' && gen.result) {
-      setCompletedResults((list) => [gen.result as GenerationResult, ...list].slice(0, MAX_COMPLETED_RESULTS))
+      const { promptId, urls, createdAt } = gen.result
+      const items: CompletedItem[] = urls.map((url) => ({ promptId, url, createdAt }))
+      setCompletedResults((list) => [...items, ...list].slice(0, MAX_COMPLETED_RESULTS))
     }
 
     if (queue.length === 0) return
@@ -178,19 +208,35 @@ export default function App() {
     })
   }
 
-  const canGenerate = settings.prompt.trim().length > 0 && settings.inputImage !== null
+  // No image required — the workflow's LoadImageCrop node already has a
+  // default placeholder image baked into template.json (see fieldMap.ts),
+  // so leaving inputImage unset falls straight through to a text-only
+  // (txt2vid) generation instead of failing; setting one switches to
+  // img2vid. Same workflow either way, this is purely a UI-level choice.
+  const canGenerate = settings.prompt.trim().length > 0
 
   function handleGenerate() {
     // ComfyUI's "easy seed" node has no server-side randomize behavior of its
     // own — it just uses whatever seed value it's given. So unless the user
     // pinned it, a fresh seed is picked here, right before submitting, and
     // the field is updated so it's clear which seed this generation actually used.
-    const toSend = settings.fixedSeed ? settings : { ...settings, seed: randomSeed() }
-    if (!settings.fixedSeed) setSettings((s) => ({ ...s, seed: toSend.seed }))
+    //
+    // batchCount > 1: the video model has no native batch_size (checked via
+    // ComfyUI's own /object_info — MiniMaxH3ImageToVideo doesn't take one),
+    // so "batch" here means queuing N separate jobs instead of one, each
+    // with its own freshly-randomized seed when not fixed.
+    const count = Math.max(1, Math.round(settings.batchCount))
+    const items: GenerationSettings[] = []
+    for (let i = 0; i < count; i++) {
+      items.push(settings.fixedSeed ? settings : { ...settings, seed: randomSeed() })
+    }
+    if (!settings.fixedSeed) setSettings((s) => ({ ...s, seed: items[items.length - 1].seed }))
     if (isBusy) {
-      setQueue((q) => [...q, toSend])
+      setQueue((q) => [...q, ...items])
     } else {
-      gen.generate(toSend)
+      const [first, ...rest] = items
+      gen.generate(first)
+      if (rest.length > 0) setQueue((q) => [...q, ...rest])
     }
   }
 
@@ -203,8 +249,11 @@ export default function App() {
       <header className="app-header" ref={headerRef}>
         <h1>MiniMax H3 Mobil Kontrol</h1>
         <nav className="tabs">
-          <button className={tab === 'create' ? 'tab tab-active' : 'tab'} onClick={() => setTab('create')}>
-            Oluştur
+          <button className={tab === 'image' ? 'tab tab-active' : 'tab'} onClick={() => setTab('image')}>
+            Görsel
+          </button>
+          <button className={tab === 'video' ? 'tab tab-active' : 'tab'} onClick={() => setTab('video')}>
+            Video
           </button>
           <button className={tab === 'gallery' ? 'tab tab-active' : 'tab'} onClick={() => setTab('gallery')}>
             Galeri
@@ -212,11 +261,31 @@ export default function App() {
         </nav>
       </header>
 
-      {/* Both tabs stay permanently mounted (just hidden via display:none)
-          instead of one being conditionally unmounted — Gallery previously
-          lost its scroll position, selected source and current folder every
-          time you switched away and back, since unmounting it threw all of
-          that state away. */}
+      {/* All tabs stay permanently mounted (just hidden via display:none)
+          instead of being conditionally unmounted — Gallery previously lost
+          its scroll position, selected source and current folder every time
+          you switched away and back, since unmounting it threw all of that
+          state away; the same would happen to in-progress generations on
+          either generate tab. */}
+      <div style={{ display: tab === 'image' ? 'block' : 'none' }}>
+        <div className="tabs image-model-tabs">
+          <button className={imageModel === 'sdxl' ? 'tab tab-active' : 'tab'} onClick={() => setImageModel('sdxl')}>
+            SDXL
+          </button>
+          <button className={imageModel === 'krea2' ? 'tab tab-active' : 'tab'} onClick={() => setImageModel('krea2')}>
+            Krea2 (FLUX)
+          </button>
+        </div>
+        {/* Both stay mounted for the same reason as the outer tabs — switching
+            between model families shouldn't lose an in-progress generation. */}
+        <div style={{ display: imageModel === 'sdxl' ? 'block' : 'none' }}>
+          <ImageGenerateTab />
+        </div>
+        <div style={{ display: imageModel === 'krea2' ? 'block' : 'none' }}>
+          <Krea2GenerateTab />
+        </div>
+      </div>
+
       <div style={{ display: tab === 'gallery' ? 'block' : 'none' }}>
         <Gallery
           onSendToCreate={(imported) => {
@@ -224,12 +293,58 @@ export default function App() {
             // seed was actually recognized, so this merge doesn't need to
             // special-case it.
             setSettings((s) => ({ ...s, ...imported }))
-            setTab('create')
+            setTab('video')
           }}
         />
       </div>
 
-      <main className="form" style={{ display: tab === 'create' ? 'flex' : 'none' }}>
+      <main className="form" style={{ display: tab === 'video' ? 'flex' : 'none' }}>
+        {/* Output first, form fields below — so the current job's progress
+            or result is visible the moment this tab opens, without scrolling
+            past the whole form to find out whether anything even finished. */}
+        {queue.length > 0 && (
+          <div className="queue-panel">
+            <div className="queue-title">Kuyrukta {queue.length} iş bekliyor</div>
+            {queuePaused && (
+              <div className="status-warning">
+                ⚠ ComfyUI'ye ulaşılamadığı için kuyruk duraklatıldı.
+                <button type="button" className="secondary-button" onClick={startNextInQueue}>
+                  Devam Et
+                </button>
+              </div>
+            )}
+            {queue.map((item, i) => (
+              <div className="queue-item" key={i}>
+                <span className="queue-item-label">
+                  {i + 1}. {item.prompt.trim() || '(prompt yok)'}
+                </span>
+                <button type="button" className="queue-item-remove" onClick={() => removeFromQueue(i)} aria-label="Kuyruktan çıkar">
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <StatusPanel
+          status={gen.status}
+          currentNodeTitle={gen.currentNodeTitle}
+          totalNodeCount={gen.totalNodeCount}
+          executedNodeCount={gen.executedNodeCount}
+          samplingProgress={gen.samplingProgress}
+          previewUrl={gen.previewUrl}
+          elapsedSeconds={gen.elapsedSeconds}
+          totalElapsedSeconds={gen.totalElapsedSeconds}
+          eta={gen.eta}
+          error={gen.error}
+          result={gen.result}
+          connectionLost={gen.connectionLost}
+          recovering={gen.recovering}
+          wsStatus={gen.wsStatus}
+          onCancel={() => gen.cancel()}
+          onOpenViewer={(i) => setViewerUrl(gen.result?.urls[i] ?? null)}
+        />
+
         <ImportPngButton onImport={(imported) => setSettings((s) => ({ ...s, ...imported }))} />
 
         <ImageUploader value={settings.inputImage} onChange={(img) => update('inputImage', img)} />
@@ -316,16 +431,15 @@ export default function App() {
             <NumberField min={1} max={50} step={1} value={settings.totalSteps} onChange={(v) => update('totalSteps', v)} />
           </div>
         </div>
+
         <div className="field">
-          <label className="field-label">Denoise ({settings.denoise.toFixed(2)})</label>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={settings.denoise}
-            onChange={(e) => update('denoise', Number(e.target.value))}
-          />
+          <label className="field-label">Batch Count (arka arkaya üretilecek video sayısı)</label>
+          <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
+          {settings.batchCount > 1 && (
+            <span className="field-hint">
+              Video modelinin gerçek batch desteği yok — {settings.batchCount} ayrı iş art arda kuyruğa eklenecek.
+            </span>
+          )}
         </div>
 
         {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
@@ -333,62 +447,16 @@ export default function App() {
         <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
           {isBusy ? '+ Kuyruğa Ekle' : 'Oluştur'}
         </button>
-
-        {queue.length > 0 && (
-          <div className="queue-panel">
-            <div className="queue-title">Kuyrukta {queue.length} iş bekliyor</div>
-            {queuePaused && (
-              <div className="status-warning">
-                ⚠ ComfyUI'ye ulaşılamadığı için kuyruk duraklatıldı.
-                <button type="button" className="secondary-button" onClick={startNextInQueue}>
-                  Devam Et
-                </button>
-              </div>
-            )}
-            {queue.map((item, i) => (
-              <div className="queue-item" key={i}>
-                <span className="queue-item-label">
-                  {i + 1}. {item.prompt.trim() || '(prompt yok)'}
-                </span>
-                <button type="button" className="queue-item-remove" onClick={() => removeFromQueue(i)} aria-label="Kuyruktan çıkar">
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <StatusPanel
-          status={gen.status}
-          currentNodeTitle={gen.currentNodeTitle}
-          totalNodeCount={gen.totalNodeCount}
-          executedNodeCount={gen.executedNodeCount}
-          samplingProgress={gen.samplingProgress}
-          elapsedSeconds={gen.elapsedSeconds}
-          totalElapsedSeconds={gen.totalElapsedSeconds}
-          eta={gen.eta}
-          error={gen.error}
-          result={gen.result}
-          connectionLost={gen.connectionLost}
-          recovering={gen.recovering}
-          wsStatus={gen.wsStatus}
-          onCancel={() => gen.cancel()}
-        />
-
-        {completedResults.length > 0 && (
-          <div className="completed-panel">
-            <div className="completed-header">
-              <span className="completed-title">Tamamlanan üretimler ({completedResults.length})</span>
-              <button type="button" className="secondary-button" onClick={() => setCompletedResults([])}>
-                Temizle
-              </button>
-            </div>
-            {completedResults.map((r) => (
-              <video key={r.promptId} src={r.url} className="completed-video" controls muted loop playsInline preload="none" />
-            ))}
-          </div>
-        )}
       </main>
+
+      {viewerUrl !== null && (
+        <GenerationFullscreenViewer
+          items={completedResults.map((r) => ({ url: r.url, kind: 'video' as const }))}
+          index={completedResults.findIndex((r) => r.url === viewerUrl)}
+          onIndexChange={(i) => setViewerUrl(completedResults[i]?.url ?? null)}
+          onClose={() => setViewerUrl(null)}
+        />
+      )}
     </div>
   )
 }

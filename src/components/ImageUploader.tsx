@@ -29,7 +29,7 @@ export function ImageUploader({ value, onChange }: Props) {
 
   return (
     <div className="field">
-      <label className="field-label">Girdi Görseli</label>
+      <label className="field-label">Girdi Görseli (opsiyonel)</label>
       <div className="image-uploader" onClick={() => inputRef.current?.click()}>
         {previewUrl ? (
           <img src={previewUrl} alt="Girdi görseli" className="image-preview" />
@@ -49,6 +49,13 @@ export function ImageUploader({ value, onChange }: Props) {
         }}
       />
       {error && <div className="field-error">{error}</div>}
+      {value ? (
+        <button type="button" className="secondary-button" onClick={() => onChange(null)}>
+          ✕ Görseli Kaldır
+        </button>
+      ) : (
+        <span className="field-hint">Görsel seçilmezse düz metinden video üretilir (txt2vid); seçilirse o görselden video üretilir (img2vid).</span>
+      )}
     </div>
   )
 }

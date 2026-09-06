@@ -52,7 +52,6 @@ const FIELD_LABELS: Record<string, string> = {
   framerate: 'FPS',
   model: 'Model',
   totalSteps: 'Adım sayısı',
-  scheduler: 'Denoise',
   inputImage: 'Girdi görseli',
   loraLoader: "LoRA'lar",
 }
@@ -103,10 +102,6 @@ export function extractSettingsFromPrompt(prompt: ComfyWorkflow): PngImportResul
   const stepsNode = findNode(prompt, 'totalSteps')
   if (stepsNode) settings.totalSteps = num(stepsNode.inputs.value, 10)
   mark('totalSteps', !!stepsNode)
-
-  const schedulerNode = findNode(prompt, 'scheduler')
-  if (schedulerNode) settings.denoise = num(schedulerNode.inputs.denoise, 1)
-  mark('scheduler', !!schedulerNode)
 
   const inputImageNode = findNode(prompt, 'inputImage')
   const imagePath = inputImageNode ? String(inputImageNode.inputs.image ?? '') : ''

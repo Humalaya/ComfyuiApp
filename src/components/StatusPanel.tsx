@@ -1,6 +1,8 @@
 import { useRef } from 'react'
 import type { ComfyConnectionStatus } from '../api/comfyClient'
 import type { Eta, GenerationResult, GenerationStatus, SamplingProgress } from '../hooks/useComfyGeneration'
+import { GenerationPreview } from './GenerationPreview'
+import { ResultCarousel } from './ResultCarousel'
 
 interface Props {
   status: GenerationStatus
@@ -8,6 +10,7 @@ interface Props {
   totalNodeCount: number
   executedNodeCount: number
   samplingProgress: SamplingProgress | null
+  previewUrl: string | null
   elapsedSeconds: number
   totalElapsedSeconds: number | null
   eta: Eta
@@ -17,6 +20,9 @@ interface Props {
   recovering: boolean
   wsStatus: ComfyConnectionStatus
   onCancel: () => void
+  // Opens GenerationFullscreenViewer at this index within the caller's own
+  // history list — see App.tsx's viewerIndex/completedResults.
+  onOpenViewer: (index: number) => void
 }
 
 function wsStatusLabel(status: ComfyConnectionStatus): string | null {
@@ -37,6 +43,7 @@ export function StatusPanel({
   totalNodeCount,
   executedNodeCount,
   samplingProgress,
+  previewUrl,
   elapsedSeconds,
   totalElapsedSeconds,
   eta,
@@ -46,8 +53,9 @@ export function StatusPanel({
   recovering,
   wsStatus,
   onCancel,
+  onOpenViewer,
 }: Props) {
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const resultRef = useRef<HTMLDivElement>(null)
 
   if (status === 'idle') return null
 
@@ -65,16 +73,12 @@ export function StatusPanel({
       <div className="status-panel status-panel-done">
         <div className="status-title">✓ Üretim Tamamlandı</div>
         {totalElapsedSeconds !== null && <div className="status-row">Toplam süre: {totalElapsedSeconds} sn</div>}
-        <button type="button" className="secondary-button" onClick={() => videoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+        <button type="button" className="secondary-button" onClick={() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
           Sonucu Görüntüle
         </button>
-        {/* muted is required for autoPlay to be allowed unmuted-by-default at
-            all, but it matters even more here specifically: this video can
-            mount while the app is backgrounded (a generation that finished
-            while the phone was locked/away, now recovered — see
-            useComfyGeneration.ts), so autoplaying WITH sound would mean audio
-            blasting out of a phone the user isn't even looking at. */}
-        <video ref={videoRef} className="result-video" src={result.url} controls autoPlay muted loop playsInline />
+        <div ref={resultRef}>
+          <ResultCarousel key={result.promptId} urls={result.urls} kind="video" onOpen={onOpenViewer} />
+        </div>
       </div>
     )
   }
@@ -116,6 +120,11 @@ export function StatusPanel({
               currentNodeTitle && <>İşleniyor: {currentNodeTitle}</>
             )}
           </div>
+
+          {/* progress omitted here — the "Sampling X / Y" line just above
+              already says this; GenerationPreview's own step line is only
+              needed on the image tabs, which don't otherwise show one. */}
+          <GenerationPreview previewUrl={previewUrl} progress={null} />
 
           <div className="progress-bar">
             <div className="progress-bar-fill" style={{ width: `${pct}%` }} />

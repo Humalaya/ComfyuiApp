@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   COMFY_BASE_URL,
   connectComfySocket,
+  extractHistoryErrorMessage,
   getHistory,
   interrupt,
   queuePrompt,
@@ -21,7 +22,11 @@ export type GenerationStatus = 'idle' | 'queued' | 'running' | 'done' | 'error'
 
 export interface GenerationResult {
   promptId: string
-  url: string
+  // Every file this job's output node saved — MiniMaxH3ImageToVideo has no
+  // native batch support (checked via /object_info) so this is normally
+  // just one, but kept as an array for the same reason the image workflows
+  // need one: a single job can genuinely produce several files.
+  urls: string[]
   createdAt: number
 }
 
@@ -42,6 +47,11 @@ interface GenerationState {
   totalNodeCount: number
   executedNodeCount: number
   samplingProgress: SamplingProgress | null
+  // A live low-res snapshot of the currently-sampling (still noisy) latent —
+  // only present while `currentNodeId` is a node of this job's own prompt
+  // (see the WS handler's 'preview' branch), so a preview belonging to some
+  // other prompt ComfyUI happens to be executing right now never leaks in.
+  previewUrl: string | null
   elapsedSeconds: number
   totalElapsedSeconds: number | null
   eta: Eta
@@ -76,6 +86,7 @@ const initialState: GenerationState = {
   totalNodeCount: 0,
   executedNodeCount: 0,
   samplingProgress: null,
+  previewUrl: null,
   elapsedSeconds: 0,
   totalElapsedSeconds: null,
   eta: null,
@@ -100,11 +111,10 @@ const CONNECTION_LOST_THRESHOLD = 3
 // always eventually detected even if every WS message was missed.
 const HISTORY_POLL_MS = 5000
 
-function extractVideoFile(outputs: Record<string, unknown>): HistoryOutputFile | null {
+function extractVideoFiles(outputs: Record<string, unknown>): HistoryOutputFile[] {
   const nodeOutput = outputs[VIDEO_OUTPUT_NODE_ID] as Record<string, HistoryOutputFile[]> | undefined
-  if (!nodeOutput) return null
-  const files = nodeOutput.gifs ?? nodeOutput.videos ?? nodeOutput.images
-  return files && files.length > 0 ? files[0] : null
+  if (!nodeOutput) return []
+  return nodeOutput.gifs ?? nodeOutput.videos ?? nodeOutput.images ?? []
 }
 
 function computeEta(progress: SamplingProgress | null, phaseStart: number | null): Eta {
@@ -173,12 +183,12 @@ export function useComfyGeneration() {
       stopKeepAlive()
       clearActiveJob()
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
-      const file = extractVideoFile(entry.outputs)
-      if (file) {
+      const files = extractVideoFiles(entry.outputs)
+      if (files.length > 0) {
         settle({
           status: 'done',
           totalElapsedSeconds: elapsedSeconds,
-          result: { promptId, url: viewUrl(file.filename, file.subfolder, file.type), createdAt: Date.now() },
+          result: { promptId, urls: files.map((f) => viewUrl(f.filename, f.subfolder, f.type)), createdAt: Date.now() },
         })
         notify('✓ Üretim tamamlandı', `Video hazır (${elapsedSeconds} sn).`)
       } else {
@@ -190,6 +200,29 @@ export function useComfyGeneration() {
     [settle, stopTicking],
   )
 
+  // A node throwing mid-execution never makes ComfyUI set completed: true —
+  // it stays false forever with status_str: 'error' instead. Normally the
+  // WS 'execution_error' listener below catches this immediately, but if
+  // the socket happens to be down/reconnecting right at that moment (the
+  // exact scenario all of this hook's reconnect logic exists for), this
+  // /history-only path was the only thing left checking — and it only ever
+  // looked at `completed`, so it would've kept polling this same failed
+  // entry forever with nothing ever shown to the user. Mirrors the identical
+  // fix in useImageGeneration.ts.
+  const failFromHistory = useCallback(
+    (promptId: string, entry: HistoryEntry) => {
+      if (activePromptId.current !== promptId) return
+      activePromptId.current = null
+      stopTicking()
+      stopKeepAlive()
+      clearActiveJob()
+      const error = extractHistoryErrorMessage(entry)
+      settle({ status: 'error', error })
+      notify('✗ Üretim hatası', error)
+    },
+    [settle, stopTicking],
+  )
+
   const pollHistoryOnce = useCallback(
     async (promptId: string) => {
       try {
@@ -197,8 +230,10 @@ export function useComfyGeneration() {
         consecutivePollFailures.current = 0
         setState((s) => (s.connectionLost ? { ...s, connectionLost: false } : s))
         const entry = history[promptId]
-        if (entry && entry.status?.completed) {
+        if (entry?.status?.completed) {
           finishFromHistory(promptId, entry)
+        } else if (entry?.status?.status_str === 'error') {
+          failFromHistory(promptId, entry)
         }
       } catch {
         // transient network error — the next tick (or the WS path) will retry,
@@ -209,7 +244,7 @@ export function useComfyGeneration() {
         }
       }
     },
-    [finishFromHistory],
+    [finishFromHistory, failFromHistory],
   )
 
   // If the user comes back to the tab mid-generation, check immediately
@@ -287,6 +322,12 @@ export function useComfyGeneration() {
               eta: null,
             }))
           }
+        } else if (msg.type === 'preview') {
+          // No prompt_id on these frames (see ComfyWsMessage's 'preview'
+          // case) — currentNodeId is only non-null while a node of *this*
+          // prompt is the one actually executing right now, which is the
+          // closest available proxy for "this preview is mine".
+          setState((s) => (s.currentNodeId !== null ? { ...s, previewUrl: msg.data.url } : s))
         } else if (msg.type === 'execution_error' && msg.data.prompt_id === promptId) {
           const error = msg.data.exception_message ?? 'ComfyUI çalıştırma hatası'
           activePromptId.current = null

@@ -23,6 +23,10 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  /* Safety net: a long unbreakable label (a LoRA filename, say) inside a
+     grid/flex item can otherwise force that item past its track width and
+     widen the whole page into horizontal scroll. */
+  overflow-x: hidden;
 }
 
 .app {
@@ -68,6 +72,15 @@ body {
   border-color: var(--accent);
 }
 
+.image-model-tabs {
+  margin-bottom: 14px;
+}
+
+.image-model-tabs .tab {
+  padding: 8px;
+  font-size: 0.85rem;
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -111,6 +124,12 @@ textarea {
   background: var(--surface);
   color: var(--text);
   width: 100%;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
 }
 
 input[type='range'] {
@@ -238,24 +257,68 @@ input[type='range'] {
 
 /* LoRA list */
 
-.lora-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.lora-row {
+.lora-list-toggle {
   display: flex;
   align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+}
+
+.lora-list-toggle-label {
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.lora-list-toggle-summary {
+  flex: 1;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+
+.lora-list-toggle-chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+}
+
+.lora-list-toggle-chevron-open {
+  transform: rotate(180deg);
+}
+
+.lora-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 10px;
-  padding: 10px;
+  margin-top: 10px;
+  /* The whole grid is at most as wide as its parent field — without this,
+     a track can be sized past the viewport by a child's intrinsic content
+     (see .lora-card) and push the page into horizontal scroll. */
+  max-width: 100%;
+}
+
+.lora-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
   border-radius: 10px;
   background: var(--surface);
   border: 1px solid var(--border);
   opacity: 0.6;
+  /* A grid item's automatic minimum width defaults to its content's
+     min-content size, and a nowrap label's min-content IS its full,
+     untruncated width — without this, a long LoRA filename silently
+     forces this card (and the whole page) wider than its 1fr track. */
+  min-width: 0;
 }
 
-.lora-row-on {
+.lora-card-on {
   opacity: 1;
   border-color: var(--accent-dim);
 }
@@ -293,20 +356,70 @@ input[type='range'] {
 
 .lora-name,
 .lora-select {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
 }
 
 .lora-select {
   padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+}
+
+.lora-select-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A fixed square so every card lines up the same whether or not its LoRA
+   has a preview image — tapping it toggles the slot on/off directly. */
+.lora-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lora-thumb:disabled {
+  opacity: 0.5;
+}
+
+.lora-thumb-on {
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.lora-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lora-weight-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .lora-strength {
-  width: 70px;
+  flex: 1;
+  min-width: 0;
 }
 
 .lora-strength-value {
@@ -378,6 +491,29 @@ input[type='range'] {
   border-color: var(--success);
 }
 
+/* Live step-by-step preview (Forge-style) — the currently-sampling, still
+   noisy latent, pushed over the WS as a JPEG frame (see comfyClient.ts). */
+.gen-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.gen-preview-img {
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.gen-preview-step {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
 .progress-bar {
   height: 8px;
   border-radius: 999px;
@@ -397,33 +533,55 @@ input[type='range'] {
   background: black;
 }
 
-.completed-panel {
+/* ResultCarousel — a finished batch's extra files, shown big+strip rather
+   than just discarding everything past the first one. */
+.result-carousel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-}
-
-.completed-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
 
-.completed-title {
-  font-size: 0.85rem;
-  color: var(--text-dim);
-  font-weight: 600;
+.result-carousel-main {
+  /* touch-action so a horizontal swipe (see ResultCarousel.tsx) doesn't also
+     try to pan/zoom the image itself on top of switching the selection. */
+  touch-action: pan-y;
 }
 
-.completed-video {
+.result-carousel-main-clickable {
+  cursor: pointer;
+}
+
+.result-carousel-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.result-carousel-thumb {
+  flex-shrink: 0;
+  width: 56px;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 0;
+  overflow: hidden;
+  opacity: 0.6;
+}
+
+.result-carousel-thumb-active {
+  opacity: 1;
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.result-carousel-thumb-media {
   width: 100%;
-  border-radius: 10px;
-  background: black;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
 }
 
 /* Gallery */
@@ -755,4 +913,82 @@ input[type='range'] {
 
 .import-summary-missing {
   color: var(--text-dim);
+}
+
+/* LoRA picker */
+
+.lora-picker {
+  width: 100%;
+  max-width: 480px;
+  max-height: min(80dvh, 600px);
+  background: var(--surface);
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+.lora-picker-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lora-picker-search {
+  flex: 1;
+}
+
+.lora-picker-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lora-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.lora-picker-item-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: white;
+}
+
+.lora-picker-item-thumb {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lora-picker-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lora-picker-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
