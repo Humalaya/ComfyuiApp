@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ImageUploader } from './components/ImageUploader'
 import { NumberField } from './components/NumberField'
 import { ImportPngButton } from './components/ImportPngButton'
@@ -6,9 +6,15 @@ import { LoraList } from './components/LoraList'
 import { StatusPanel } from './components/StatusPanel'
 import { Gallery } from './components/Gallery'
 import { useObjectInfo } from './hooks/useObjectInfo'
-import { useComfyGeneration } from './hooks/useComfyGeneration'
+import { useComfyGeneration, type GenerationResult } from './hooks/useComfyGeneration'
 import { getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
 import { loadSettings, saveSettings } from './storage/settingsStorage'
+import { loadQueue, saveQueue } from './storage/queueStorage'
+
+// Kept small on purpose — this is just a "what finished recently" log so a
+// batch's earlier results stay visible after the queue moves on (see the
+// completedResults state below), not a real history feature.
+const MAX_COMPLETED_RESULTS = 20
 
 type Tab = 'create' | 'gallery'
 
@@ -26,11 +32,47 @@ export default function App() {
   // something is saved, the seed is whatever the user left it at, same as
   // every other field.
   const [settings, setSettings] = useState<GenerationSettings>(() => loadSettings() ?? { ...getDefaultSettings(), seed: randomSeed() })
-  const [queue, setQueue] = useState<GenerationSettings[]>([])
+  // Restored from storage on mount for the exact reason jobStorage.ts exists
+  // for the *active* job: a page reload mid-batch (screen lock, OEM
+  // background kill, manual refresh) used to wipe this array outright, since
+  // it only ever lived in memory — which is exactly what silently ate an
+  // overnight queue of ~15 videos down to just the first one or two. See
+  // queueStorage.ts.
+  const [queue, setQueue] = useState<GenerationSettings[]>(() => loadQueue())
+  // Recently-finished results, most recent first — kept here (separate from
+  // the single active `gen.result`) specifically so that when the queue
+  // drain effect below immediately moves on to the next job, the just-shown
+  // result doesn't just vanish; it stays visible in this small log until the
+  // whole session is closed. Not persisted: it's a convenience log, not a
+  // record of truth (the actual files are already safe on ComfyUI's disk,
+  // browsable in Galeri).
+  const [completedResults, setCompletedResults] = useState<GenerationResult[]>([])
+  // Set when the queue stops itself after a *pre-flight* failure (ComfyUI
+  // never even accepted the prompt — almost always means it's unreachable,
+  // not that this specific job was bad) instead of continuing to drain. See
+  // the effect below for why blindly continuing would be worse than pausing.
+  const [queuePaused, setQueuePaused] = useState(false)
   const objectInfo = useObjectInfo()
   const gen = useComfyGeneration()
 
-  const isBusy = gen.status === 'queued' || gen.status === 'running'
+  const isBusy = gen.status === 'queued' || gen.status === 'running' || (queuePaused && queue.length > 0)
+
+  // Measured (rather than guessed/hardcoded) so the Galeri tab's sticky
+  // breadcrumb/back button can dock its `top` exactly at the bottom of this
+  // header via the --header-height CSS var below, regardless of exact font
+  // metrics across devices.
+  const headerRef = useRef<HTMLElement>(null)
+  const [headerHeight, setHeaderHeight] = useState(0)
+
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const update = () => setHeaderHeight(el.offsetHeight)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   // Debounced so rapid-fire changes (typing in the prompt textarea) don't
   // hit localStorage on every keystroke — a few hundred ms of lag before a
@@ -41,23 +83,88 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [settings])
 
+  useEffect(() => {
+    saveQueue(queue)
+  }, [queue])
+
+  function startNextInQueue() {
+    if (queue.length === 0) return
+    const [next, ...rest] = queue
+    setQueue(rest)
+    setQueuePaused(false)
+    gen.generate(next)
+  }
+
   // Drains the queue one item at a time: the moment the active generation
   // reaches a terminal state — done, errored, or manually cancelled (which
   // also lands on 'idle') — immediately start the next queued job. The
-  // just-finished result isn't lost when this happens — it's already saved
-  // in ComfyUI's output folder (visible in the Galeri tab) and its own
-  // completion notification already fired; this just means the on-screen
-  // status panel moves on instead of sitting idle. Cancelling one queued job
-  // this way skips it and moves on rather than getting the whole queue stuck
-  // (there'd be no other trigger to drain it afterwards).
+  // just-finished result isn't lost when this happens (see completedResults
+  // above), and this just means the on-screen status panel moves on instead
+  // of sitting idle. Cancelling one queued job this way skips it and moves on
+  // rather than getting the whole queue stuck (there'd be no other trigger to
+  // drain it afterwards).
+  //
+  // Watches gen.settledCount *in addition to* gen.status on purpose: two
+  // queued jobs failing back-to-back both land on 'error', which alone is
+  // not a value *change* React re-fires an effect for — without the counter,
+  // the second failure wouldn't advance the queue at all and the rest would
+  // just sit there forever.
+  //
+  // lastDrainedKey guards against React StrictMode's documented double-
+  // invocation of an effect right after it first mounts (setup → cleanup →
+  // setup again, to help surface missing-cleanup bugs) — which this app
+  // genuinely runs under in production, not just local dev tooling (see
+  // main.tsx). Without the guard, a persisted queue with pending items and
+  // no active job (nothing running right after a reload) would have this
+  // effect's very first mount-time invocation fire twice, starting two
+  // queued jobs at once instead of one.
+  const lastDrainedKey = useRef<string | null>(null)
   useEffect(() => {
-    if ((gen.status === 'done' || gen.status === 'error' || gen.status === 'idle') && queue.length > 0) {
-      const [next, ...rest] = queue
-      setQueue(rest)
-      gen.generate(next)
+    if (!(gen.status === 'done' || gen.status === 'error' || gen.status === 'idle')) return
+    const key = `${gen.status}:${gen.settledCount}`
+    if (lastDrainedKey.current === key) return
+    lastDrainedKey.current = key
+
+    if (gen.status === 'done' && gen.result) {
+      setCompletedResults((list) => [gen.result as GenerationResult, ...list].slice(0, MAX_COMPLETED_RESULTS))
     }
+
+    if (queue.length === 0) return
+
+    if (gen.status === 'error' && gen.preflightFailure) {
+      // ComfyUI itself is almost certainly unreachable — starting the next
+      // item would just fail the exact same way, and doing that 14 more
+      // times in a row would burn through an entire overnight queue in a
+      // few seconds with nothing to show for it. Stop and wait for either a
+      // manual retry or the app being reopened (see the visibility effect
+      // below), instead.
+      setQueuePaused(true)
+      return
+    }
+
+    startNextInQueue()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen.status])
+  }, [gen.status, gen.settledCount])
+
+  // One retry attempt whenever the app is reopened/foregrounded while the
+  // queue is paused — covers exactly the "left it overnight, ComfyUI (or the
+  // PC) was down for a while, came back before I checked in the morning"
+  // case, without looping retries while still definitely unreachable.
+  useEffect(() => {
+    function onVisible() {
+      const genIdle = gen.status !== 'queued' && gen.status !== 'running'
+      if (document.visibilityState === 'visible' && queuePaused && queue.length > 0 && genIdle) {
+        startNextInQueue()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+    // Re-registered (cheap) whenever any of these change, specifically so the
+    // closure over `queue`/`gen.status` can't go stale between a pause and
+    // whenever the user next foregrounds the app — e.g. removing a queued
+    // item while paused, without this, would resume against the old queue.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queuePaused, queue, gen.status])
 
   function update<K extends keyof GenerationSettings>(key: K, value: GenerationSettings[K]) {
     setSettings((s) => ({ ...s, [key]: value }))
@@ -92,8 +199,8 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="app-header">
+    <div className="app" style={{ '--header-height': `${headerHeight}px` } as CSSProperties}>
+      <header className="app-header" ref={headerRef}>
         <h1>MiniMax H3 Mobil Kontrol</h1>
         <nav className="tabs">
           <button className={tab === 'create' ? 'tab tab-active' : 'tab'} onClick={() => setTab('create')}>
@@ -155,32 +262,18 @@ export default function App() {
         <div className="field-row">
           <div className="field">
             <label className="field-label">Süre (saniye)</label>
-            <input
-              type="number"
-              min={1}
-              max={30}
-              step={1}
-              value={settings.videoLengthSeconds}
-              onChange={(e) => update('videoLengthSeconds', Number(e.target.value))}
-            />
+            <NumberField min={1} max={30} step={1} value={settings.videoLengthSeconds} onChange={(v) => update('videoLengthSeconds', v)} />
           </div>
           <div className="field">
             <label className="field-label">FPS</label>
-            <input
-              type="number"
-              min={8}
-              max={60}
-              step={1}
-              value={settings.framerate}
-              onChange={(e) => update('framerate', Number(e.target.value))}
-            />
+            <NumberField min={8} max={60} step={1} value={settings.framerate} onChange={(v) => update('framerate', v)} />
           </div>
         </div>
 
         <div className="field">
           <label className="field-label">Seed</label>
           <div className="seed-row">
-            <input type="number" value={settings.seed} onChange={(e) => update('seed', Number(e.target.value))} />
+            <NumberField value={settings.seed} onChange={(v) => update('seed', v)} />
             <button type="button" className="secondary-button" onClick={() => update('seed', randomSeed())}>
               🎲 Rastgele
             </button>
@@ -220,14 +313,7 @@ export default function App() {
           </div>
           <div className="field">
             <label className="field-label">Adım Sayısı</label>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              step={1}
-              value={settings.totalSteps}
-              onChange={(e) => update('totalSteps', Number(e.target.value))}
-            />
+            <NumberField min={1} max={50} step={1} value={settings.totalSteps} onChange={(v) => update('totalSteps', v)} />
           </div>
         </div>
         <div className="field">
@@ -251,6 +337,14 @@ export default function App() {
         {queue.length > 0 && (
           <div className="queue-panel">
             <div className="queue-title">Kuyrukta {queue.length} iş bekliyor</div>
+            {queuePaused && (
+              <div className="status-warning">
+                ⚠ ComfyUI'ye ulaşılamadığı için kuyruk duraklatıldı.
+                <button type="button" className="secondary-button" onClick={startNextInQueue}>
+                  Devam Et
+                </button>
+              </div>
+            )}
             {queue.map((item, i) => (
               <div className="queue-item" key={i}>
                 <span className="queue-item-label">
@@ -280,6 +374,20 @@ export default function App() {
           wsStatus={gen.wsStatus}
           onCancel={() => gen.cancel()}
         />
+
+        {completedResults.length > 0 && (
+          <div className="completed-panel">
+            <div className="completed-header">
+              <span className="completed-title">Tamamlanan üretimler ({completedResults.length})</span>
+              <button type="button" className="secondary-button" onClick={() => setCompletedResults([])}>
+                Temizle
+              </button>
+            </div>
+            {completedResults.map((r) => (
+              <video key={r.promptId} src={r.url} className="completed-video" controls muted loop playsInline preload="none" />
+            ))}
+          </div>
+        )}
       </main>
     </div>
   )

@@ -6,6 +6,8 @@ interface Props {
   min?: number
   max?: number
   step?: number
+  disabled?: boolean
+  className?: string
 }
 
 // A plain <input type="number"> bound directly to a numeric value fights
@@ -14,7 +16,7 @@ interface Props {
 // into the input, so the field never actually looks empty — it snaps back to
 // "0" on every keystroke of a delete. This keeps its own text draft instead,
 // only committing (and reflecting back) a real number once one exists.
-export function NumberField({ value, onChange, min, max, step }: Props) {
+export function NumberField({ value, onChange, min, max, step, disabled, className }: Props) {
   const [draft, setDraft] = useState(String(value))
   const focused = useRef(false)
 
@@ -33,6 +35,8 @@ export function NumberField({ value, onChange, min, max, step }: Props) {
       max={max}
       step={step}
       value={draft}
+      disabled={disabled}
+      className={className}
       onFocus={() => {
         focused.current = true
       }}

@@ -1,3 +1,4 @@
+import { NumberField } from './NumberField'
 import type { LoraSlot } from '../workflow/fieldMap'
 
 interface Props {
@@ -51,7 +52,15 @@ export function LoraList({ loras, loraNames, onChange }: Props) {
               onChange={(e) => onChange(i, { ...slot, strength: Number(e.target.value) })}
               className="lora-strength"
             />
-            <span className="lora-strength-value">{slot.strength.toFixed(2)}</span>
+            <NumberField
+              min={0}
+              max={2}
+              step={0.05}
+              value={slot.strength}
+              disabled={!slot.on}
+              onChange={(v) => onChange(i, { ...slot, strength: v })}
+              className="lora-strength-value"
+            />
           </div>
         ))}
       </div>

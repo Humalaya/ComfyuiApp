@@ -40,8 +40,9 @@ function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
 // Rebuilds a fully-valid GenerationSettings from untrusted parsed JSON,
 // field by field — anything missing, mistyped, or from an incompatible
 // schema silently falls back to the matching default instead of corrupting
-// the whole form or crashing the app.
-function normalize(raw: unknown, defaults: GenerationSettings): GenerationSettings {
+// the whole form or crashing the app. Exported so queueStorage.ts can apply
+// the exact same validation to each item of a persisted queue.
+export function normalizeSettings(raw: unknown, defaults: GenerationSettings = getDefaultSettings()): GenerationSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const r = raw as Partial<GenerationSettings>
   return {
@@ -72,7 +73,7 @@ export function loadSettings(): GenerationSettings | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as { version?: number; settings?: unknown }
     if (parsed.version !== STORAGE_VERSION || !parsed.settings) return null
-    return normalize(parsed.settings, getDefaultSettings())
+    return normalizeSettings(parsed.settings)
   } catch {
     return null
   }

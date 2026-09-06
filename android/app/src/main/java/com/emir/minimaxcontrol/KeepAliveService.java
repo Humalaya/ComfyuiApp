@@ -8,6 +8,8 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.media.AudioAttributes;
+import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
@@ -46,7 +48,13 @@ import org.json.JSONObject;
 public class KeepAliveService extends Service {
 
     private static final String CHANNEL_ID = "keepalive";
-    private static final String RESULT_CHANNEL_ID = "generation_result";
+    // Bumped from "generation_result" — Android notification channels are
+    // immutable once created (including their sound), so giving this
+    // channel a custom sound (res/raw/notification_sound.mp3) required a
+    // fresh id; the old channel is deleted in createNotificationChannels()
+    // below so it doesn't linger as a dead duplicate in system settings.
+    private static final String RESULT_CHANNEL_ID = "generation_result_v2";
+    private static final String LEGACY_RESULT_CHANNEL_ID = "generation_result";
     private static final int NOTIFICATION_ID = 1;
     // Same id the WebView side uses for its own LocalNotifications call
     // (see src/native/notifications.ts) — whichever of the two paths notices
@@ -316,7 +324,18 @@ public class KeepAliveService extends Service {
                 NotificationManager.IMPORTANCE_HIGH
             );
             result.setDescription("Video üretimi tamamlandığında veya hata verdiğinde gösterilen bildirim");
+            Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/notification_sound");
+            AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+            result.setSound(soundUri, audioAttributes);
             manager.createNotificationChannel(result);
+
+            // Deletes the pre-existing channel from earlier app versions —
+            // otherwise it lingers forever as an unused duplicate "Üretim
+            // Sonucu" entry in the system notification settings screen.
+            manager.deleteNotificationChannel(LEGACY_RESULT_CHANNEL_ID);
         }
     }
 }

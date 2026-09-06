@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { useOutputBrowser, useOutputSources } from '../hooks/useOutputBrowser'
 import { outputDownloadUrl, outputFileUrl, outputThumbnailUrl, type OutputFile } from '../api/outputsClient'
 import { extractA1111PositivePrompt, extractShareableMetadataText, readPngTextChunks } from '../utils/pngMetadata'
@@ -50,6 +50,40 @@ export function Gallery({ onSendToCreate }: Props) {
   const [metadata, setMetadata] = useState<MetadataState | null>(null)
   const [metadataLoadingName, setMetadataLoadingName] = useState<string | null>(null)
   const [sendingAction, setSendingAction] = useState<'settings' | 'image' | null>(null)
+  // The subfolder path you just came *up* from, so it can be highlighted in
+  // its parent's folder list — a plain "Geri" with no other cue made it easy
+  // to lose track of which folder you were just in, especially in a source
+  // with hundreds of same-looking dated folders (Forge).
+  const [justLeftPath, setJustLeftPath] = useState<string | null>(null)
+
+  // Restores scroll position on "Geri"/folder navigation instead of always
+  // landing back at the top. Without this, going up a folder (often to a
+  // *shorter* listing, or briefly an empty one while `loading`) collapses
+  // the page height out from under the current scroll offset, so the
+  // browser clamps scroll back to 0 — which reads as "it always jumps to the
+  // top" even though nothing explicitly scrolled anywhere.
+  const scrollPositions = useRef<Map<string, number>>(new Map())
+  const pendingRestoreKey = useRef<string | null>(null)
+
+  function pathKey(src: string, path: string): string {
+    return `${src}::${path}`
+  }
+
+  function saveScrollPosition() {
+    scrollPositions.current.set(pathKey(source, currentPath), window.scrollY)
+  }
+
+  // Only actually restores once, right after the navigation that requested
+  // it (via pendingRestoreKey) finishes loading its new content — a plain
+  // "🔄 Yenile" on the same folder never sets pendingRestoreKey, so it's left
+  // alone rather than yanking scroll back on every refresh.
+  useEffect(() => {
+    const key = pathKey(source, currentPath)
+    if (!loading && pendingRestoreKey.current === key) {
+      window.scrollTo(0, scrollPositions.current.get(key) ?? 0)
+      pendingRestoreKey.current = null
+    }
+  }, [loading, source, currentPath])
 
   // Only switch to a source that's actually configured once we know the list.
   useEffect(() => {
@@ -64,14 +98,28 @@ export function Gallery({ onSendToCreate }: Props) {
   }, [source, currentPath])
 
   function switchSource(id: string) {
+    saveScrollPosition()
+    setJustLeftPath(null)
+    pendingRestoreKey.current = pathKey(id, '')
     setSource(id)
     setCurrentPath('')
   }
 
+  function openFolder(folder: string) {
+    saveScrollPosition()
+    setJustLeftPath(null)
+    pendingRestoreKey.current = pathKey(source, folder)
+    setCurrentPath(folder)
+  }
+
   function goUp() {
+    saveScrollPosition()
+    setJustLeftPath(currentPath)
     setCurrentPath((p) => {
       const idx = p.lastIndexOf('/')
-      return idx === -1 ? '' : p.slice(0, idx)
+      const parent = idx === -1 ? '' : p.slice(0, idx)
+      pendingRestoreKey.current = pathKey(source, parent)
+      return parent
     })
   }
 
@@ -188,7 +236,12 @@ export function Gallery({ onSendToCreate }: Props) {
       {folders.length > 0 && (
         <div className="folder-list">
           {folders.map((folder) => (
-            <button key={folder} type="button" className="folder-tile" onClick={() => setCurrentPath(folder)}>
+            <button
+              key={folder}
+              type="button"
+              className={folder === justLeftPath ? 'folder-tile folder-tile-recent' : 'folder-tile'}
+              onClick={() => openFolder(folder)}
+            >
               📁 {folderLabel(folder)}
             </button>
           ))}

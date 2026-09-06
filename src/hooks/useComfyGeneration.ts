@@ -60,6 +60,13 @@ interface GenerationState {
   // "reconnecting" message instead until either a live WS update arrives or
   // the /history poll finds it already finished.
   recovering: boolean
+  // True only for an 'error' that happened before ComfyUI ever accepted the
+  // prompt (queuePrompt() itself threw — most often because ComfyUI is
+  // unreachable, not because this specific job was invalid). App.tsx's queue
+  // uses this to tell "ComfyUI is down, stop burning through the rest of an
+  // unattended batch instantly" apart from "this one job failed for its own
+  // reason, the rest are probably fine, keep going."
+  preflightFailure: boolean
 }
 
 const initialState: GenerationState = {
@@ -76,6 +83,7 @@ const initialState: GenerationState = {
   result: null,
   connectionLost: false,
   recovering: false,
+  preflightFailure: false,
 }
 
 // How many consecutive failed /history polls (5s apart, see HISTORY_POLL_MS)
@@ -117,6 +125,20 @@ export function useComfyGeneration() {
   // "wsStatus resets to 'connecting' just because a generation finished" is
   // wrong (the socket itself didn't go anywhere).
   const [wsStatus, setWsStatus] = useState<ComfyConnectionStatus>('connecting')
+  // Bumped on every terminal transition (done/error/idle), in addition to
+  // `status` itself changing. A caller (App.tsx's queue-drain effect) that
+  // only watches `status` misses back-to-back settles that land on the same
+  // value — e.g. two queued jobs failing in a row both end at 'error', which
+  // is not a *change* React would re-fire an effect for, so the second queued
+  // item would never get picked up and the rest of the queue would silently
+  // stop advancing. This counter changes every single time, so watching it
+  // alongside `status` can't miss one.
+  const [settledCount, setSettledCount] = useState(0)
+
+  const settle = useCallback((patch: Partial<GenerationState>) => {
+    setState({ ...initialState, ...patch })
+    setSettledCount((c) => c + 1)
+  }, [])
 
   const activePromptId = useRef<string | null>(null)
   const nodeTitles = useRef<Record<string, string>>({})
@@ -153,8 +175,7 @@ export function useComfyGeneration() {
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
       const file = extractVideoFile(entry.outputs)
       if (file) {
-        setState({
-          ...initialState,
+        settle({
           status: 'done',
           totalElapsedSeconds: elapsedSeconds,
           result: { promptId, url: viewUrl(file.filename, file.subfolder, file.type), createdAt: Date.now() },
@@ -162,11 +183,11 @@ export function useComfyGeneration() {
         notify('✓ Üretim tamamlandı', `Video hazır (${elapsedSeconds} sn).`)
       } else {
         const error = 'Çıktı bulunamadı (workflow beklenmedik şekilde sonuçlandı).'
-        setState({ ...initialState, status: 'error', error })
+        settle({ status: 'error', error })
         notify('✗ Üretim hatası', error)
       }
     },
-    [stopTicking],
+    [settle, stopTicking],
   )
 
   const pollHistoryOnce = useCallback(
@@ -238,7 +259,7 @@ export function useComfyGeneration() {
                   stopTicking()
                   stopKeepAlive()
                   clearActiveJob()
-                  setState({ ...initialState, status: 'error', error })
+                  settle({ status: 'error', error })
                   notify('✗ Üretim hatası', error)
                 }
               })
@@ -248,7 +269,7 @@ export function useComfyGeneration() {
                 stopTicking()
                 stopKeepAlive()
                 clearActiveJob()
-                setState({ ...initialState, status: 'error', error })
+                settle({ status: 'error', error })
                 notify('✗ Üretim hatası', error)
               })
           } else {
@@ -272,14 +293,14 @@ export function useComfyGeneration() {
           stopTicking()
           stopKeepAlive()
           clearActiveJob()
-          setState({ ...initialState, status: 'error', error })
+          settle({ status: 'error', error })
           notify('✗ Üretim hatası', error)
         }
       },
       (status) => setWsStatus(status),
     )
     return disconnect
-  }, [stopTicking, finishFromHistory])
+  }, [stopTicking, finishFromHistory, settle])
 
   const generate = useCallback(
     async (settings: GenerationSettings) => {
@@ -287,7 +308,7 @@ export function useComfyGeneration() {
       try {
         workflow = buildWorkflow(settings)
       } catch (err) {
-        setState({ ...initialState, status: 'error', error: (err as Error).message })
+        settle({ status: 'error', error: (err as Error).message })
         return
       }
 
@@ -332,10 +353,12 @@ export function useComfyGeneration() {
       } catch (err) {
         stopTicking()
         stopKeepAlive()
-        setState({ ...initialState, status: 'error', error: (err as Error).message })
+        // activePromptId.current was never set in this branch — ComfyUI
+        // never got this prompt at all (most likely it's unreachable).
+        settle({ status: 'error', error: (err as Error).message, preflightFailure: true })
       }
     },
-    [stopTicking, pollHistoryOnce],
+    [stopTicking, pollHistoryOnce, settle],
   )
 
   const reset = useCallback(() => {
@@ -343,8 +366,8 @@ export function useComfyGeneration() {
     stopKeepAlive()
     clearActiveJob()
     activePromptId.current = null
-    setState(initialState)
-  }, [stopTicking])
+    settle({})
+  }, [stopTicking, settle])
 
   const cancel = useCallback(async () => {
     try {
@@ -354,9 +377,9 @@ export function useComfyGeneration() {
       stopKeepAlive()
       clearActiveJob()
       activePromptId.current = null
-      setState(initialState)
+      settle({})
     }
-  }, [stopTicking])
+  }, [stopTicking, settle])
 
   // Recovers a generation that was still running when the page was torn
   // down — screen lock, OEM background kill, or a manual refresh can all
@@ -405,10 +428,21 @@ export function useComfyGeneration() {
     // Resolve immediately instead of waiting up to HISTORY_POLL_MS — the
     // job may well have already finished while the page was gone.
     pollHistoryOnce(job.promptId)
+
+    // Returning this cleanup isn't just tidiness: React StrictMode (which
+    // this app genuinely runs under in production too, not just local dev
+    // tooling — see main.tsx) deliberately double-invokes an effect's first
+    // mount (setup → cleanup → setup again) to catch exactly this kind of
+    // bug. Without a cleanup here, that second setup would overwrite
+    // tickInterval/pollInterval with fresh timers while the first pair kept
+    // running unreferenced forever — two ticking intervals and two /history
+    // pollers for the same recovered job. With it, the sequence nets out to
+    // exactly one of each, same as it would without StrictMode.
+    return stopTicking
     // Mount-only by design (recovery happens once, right after the hook is
     // first used) — pollHistoryOnce/stopTicking are stable useCallbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { ...state, wsStatus, generate, reset, cancel }
+  return { ...state, wsStatus, settledCount, generate, reset, cancel }
 }
