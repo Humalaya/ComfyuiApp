@@ -290,6 +290,47 @@ Bu klasör (`mobile-control`) ComfyUI kurulumunuzdan tamamen ayrı, bağımsız 
    (output backend) telefona hiç açılmıyor — ikisi de Vite proxy'si üzerinden, PC'nin kendi
    içinden erişiliyor.
 
+## Üst menü: Üret / Galeri / ⚙
+
+Üst menü üç öğe: **Üret**, **Galeri**, **⚙ (Ayarlar)**.
+
+- **Üret** — normal dokunuş en son açık alt-görünüme gider; **uzun basış** soldan bir çekmece
+  açar: **Görsel** (SDXL/Krea2), **Video**, **OpenWebUI**.
+- **OpenWebUI** — aynı PC'deki `:3000` örneği, `<iframe>` ile gömülü. `src` panelin açıldığı
+  host'tan türetilir (`window.location.hostname` + `:3000`), yani hem LAN'da hem Tailscale'de
+  ek ayar olmadan çalışır. İlk kez açılana kadar yüklenmez, sonra (gizli de olsa) mount'ta
+  kalır ki sekme değişince chat oturumu düşmesin. Panel HTTPS'e taşınırsa (`http` OpenWebUI)
+  mixed-content'e takılır — o yüzden köşede "Tarayıcıda aç" bağlantısı var.
+- **Galeri** ve **⚙** sıradan sekmeler.
+
+## Paneli sürekli açık tutmak (systemd) + Ayarlar sekmesi
+
+Ayarlar sekmesindeki **"ComfyUI'yi Durdur"** düğmesinin paneli de kapatmaması için panel,
+ComfyUI'den ayrı bir **systemd kullanıcı servisi** olarak çalışır. Bir kez kurulur:
+
+```bash
+# repo'daki kopyayı yerine koy (yol farklıysa bu satırı kendine göre uyarla)
+cp mobile-control/systemd/mobile-control.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now mobile-control      # şimdi başlat + her açılışta başlat
+systemctl --user status mobile-control
+journalctl --user -u mobile-control -f            # canlı log
+```
+
+> nvm ile node sürümü değiştirirsen `~/.config/systemd/user/mobile-control.service` içindeki
+> `v24.14.0` yolunu güncelle (`nvm which current`).
+
+Bundan sonra `start-all.sh` **yalnızca ComfyUI** başlatır. Ayarlar sekmesi (`server/index.js`
+içindeki `/api/system/*` rotaları):
+
+- **Modeller (llama-swap)** — `LLAMA_SWAP_URL`'deki her modeli aç/kapat. Aç = ilgili modele
+  bir istek atıp yüklenmesini tetikler; kapat = `POST /api/models/unload/:id`.
+- **ComfyUI (start-all.sh)** — `START_ALL_SCRIPT`'i kendi süreç grubunda başlatır/durdurur;
+  8188 portunu yoklayıp "çalışıyor mu" durumunu gösterir. "Durdur" yalnızca bu panelden
+  başlatılan kopyayı kapatır.
+- **Bilgisayarı Kapat** — çift onaylı; `systemctl poweroff` (aktif masaüstü oturumu polkit
+  üzerinden sudo'suz izin verir).
+
 ## Test
 
 Backend için ayrı bir test suite'i yok (proje küçük, tek dosyalık bir Express sunucusu).

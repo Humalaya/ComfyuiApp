@@ -1,7 +1,8 @@
 import templateJson from './template.json'
-import { readPngTextChunks } from '../utils/pngMetadata'
+import { parseComfyWorkflowJson, readPngTextChunks } from '../utils/pngMetadata'
 import type { ComfyWorkflow } from '../api/comfyClient'
 import { LORA_SLOT_COUNT, NODE_IDS, type GenerationSettings, type LoraSlot } from './fieldMap'
+import { findNodeByIdentity, num } from './pngImportUtils'
 
 export interface PngImportResult {
   settings: Partial<GenerationSettings>
@@ -18,15 +19,7 @@ const template = templateJson as unknown as ComfyWorkflow
 // if it's from an unrelated workflow, the field is correctly reported missing
 // instead of guessing a value from an unrelated node.
 function findNode(prompt: ComfyWorkflow, nodeId: keyof typeof NODE_IDS) {
-  const templateNode = template[NODE_IDS[nodeId]]
-  const classType = templateNode.class_type
-  const title = templateNode._meta?.title
-  return Object.values(prompt).find((n) => n.class_type === classType && (!title || n._meta?.title === title))
-}
-
-function num(v: unknown, fallback: number): number {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : fallback
+  return findNodeByIdentity(prompt, template, NODE_IDS[nodeId])
 }
 
 export async function extractPromptFromPng(file: Blob): Promise<ComfyWorkflow> {
@@ -38,7 +31,7 @@ export async function extractPromptFromPng(file: Blob): Promise<ComfyWorkflow> {
     )
   }
   try {
-    return JSON.parse(raw) as ComfyWorkflow
+    return parseComfyWorkflowJson(raw) as ComfyWorkflow
   } catch {
     throw new Error('PNG içindeki workflow metadata\'sı okunamadı (bozuk JSON).')
   }

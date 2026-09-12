@@ -4,16 +4,21 @@ import { LoraList } from './LoraList'
 import { GenerationPreview } from './GenerationPreview'
 import { ResultCarousel } from './ResultCarousel'
 import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
+import { CollapsibleSection } from './CollapsibleSection'
 import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useImageGeneration } from '../hooks/useImageGeneration'
 import { buildKrea2Workflow, getDefaultKrea2Settings, KREA2_OUTPUT_NODE_ID, type Krea2GenerationSettings } from '../workflow/krea2FieldMap'
 import type { LoraSlot } from '../workflow/fieldMap'
-import { loadKrea2Settings, saveKrea2Settings } from '../storage/krea2SettingsStorage'
-import { loadKrea2Queue, saveKrea2Queue } from '../storage/krea2QueueStorage'
+import { loadKrea2Settings, normalizeKrea2Settings, saveKrea2Settings } from '../storage/krea2SettingsStorage'
+import { loadRemoteQueue, saveRemoteQueue } from '../storage/remoteQueueStorage'
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000_000)
 }
+
+// This kind's key in the output-server's shared /api/state/:kind/* store —
+// see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
+const KIND = 'krea2'
 
 // Kept small — a "what finished recently" log, not a real history feature.
 // Same rationale as App.tsx's/ImageGenerateTab.tsx's identical constant.
@@ -27,6 +32,12 @@ interface CompletedItem {
   createdAt: number
 }
 
+interface Props {
+  // Pushed from App.tsx when Galeri's "Ayarları Gönder" targets this tab —
+  // see ImageGenerateTab.tsx's identical prop for the full rationale.
+  importRequest?: { settings: Partial<Krea2GenerationSettings>; id: number } | null
+}
+
 // Krea2 (FLUX) Text2Img — a completely different pipeline from the SDXL one
 // in ImageGenerateTab.tsx (UNETLoader instead of CheckpointLoaderSimple, a
 // two-pass Clownshark sampler instead of a plain KSampler, no cfg/steps/
@@ -35,11 +46,15 @@ interface CompletedItem {
 // Same queueing pattern as the SDXL tab (batchCount queues N separate jobs
 // on top of ComfyUI's own batchSize) — see ImageGenerateTab.tsx for the full
 // rationale, this mirrors it exactly.
-export function Krea2GenerateTab() {
+export function Krea2GenerateTab({ importRequest }: Props) {
   const [settings, setSettings] = useState<Krea2GenerationSettings>(
     () => loadKrea2Settings() ?? { ...getDefaultKrea2Settings(), seed: randomSeed() },
   )
-  const [queue, setQueue] = useState<Krea2GenerationSettings[]>(() => loadKrea2Queue())
+  // Same queueing pattern as the SDXL tab, backed by the output-server's
+  // PC-RAM store — see ImageGenerateTab.tsx's identical block for the full
+  // rationale.
+  const [queue, setQueue] = useState<Krea2GenerationSettings[]>([])
+  const [queueLoaded, setQueueLoaded] = useState(false)
   const [completedResults, setCompletedResults] = useState<CompletedItem[]>([])
   // The url of the item GenerationFullscreenViewer has open — null means
   // closed. Tracked by url, not a plain index into completedResults: a new
@@ -49,7 +64,7 @@ export function Krea2GenerateTab() {
   // newer item the moment that happened.
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const objectInfo = useObjectInfo()
-  const gen = useImageGeneration(buildKrea2Workflow, KREA2_OUTPUT_NODE_ID)
+  const gen = useImageGeneration(buildKrea2Workflow, KREA2_OUTPUT_NODE_ID, KIND)
 
   useEffect(() => {
     const timer = setTimeout(() => saveKrea2Settings(settings), 400)
@@ -57,8 +72,21 @@ export function Krea2GenerateTab() {
   }, [settings])
 
   useEffect(() => {
-    saveKrea2Queue(queue)
-  }, [queue])
+    let cancelled = false
+    loadRemoteQueue(KIND, normalizeKrea2Settings).then((loaded) => {
+      if (cancelled) return
+      setQueue(loaded)
+      setQueueLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!queueLoaded) return
+    saveRemoteQueue(KIND, queue)
+  }, [queue, queueLoaded])
 
   // Drains one queued job at a time — identical design (and identical
   // StrictMode double-invoke guard) to ImageGenerateTab.tsx's queue effect;
@@ -82,6 +110,27 @@ export function Krea2GenerateTab() {
     gen.generate(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gen.status, gen.settledCount])
+
+  // See the importRequest prop's own comment (and ImageGenerateTab.tsx's
+  // identical effect) — reacts only to `id` changing.
+  useEffect(() => {
+    if (!importRequest) return
+    setSettings((s) => ({ ...s, ...importRequest.settings }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importRequest?.id])
+
+  // Same self-correcting pattern as the video tab's Model dropdown and the
+  // SDXL tab's Checkpoint dropdown — a persisted unetName can go stale (file
+  // renamed/removed, or from before this dropdown existed at all) in a way
+  // that would otherwise fail silently at generation time instead of here,
+  // where it's actually visible.
+  useEffect(() => {
+    if (objectInfo.krea2UnetNames.length === 0) return
+    if (!objectInfo.krea2UnetNames.includes(settings.unetName)) {
+      update('unetName', objectInfo.krea2UnetNames[0])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectInfo.krea2UnetNames])
 
   function update<K extends keyof Krea2GenerationSettings>(key: K, value: Krea2GenerationSettings[K]) {
     setSettings((s) => ({ ...s, [key]: value }))
@@ -121,6 +170,10 @@ export function Krea2GenerateTab() {
     setQueue((q) => q.filter((_, i) => i !== index))
   }
 
+  // Shared by the compact strip (running), the full strip (done), and
+  // GenerationFullscreenViewer.
+  const historyUrls = completedResults.map((r) => r.url)
+
   return (
     <div className="form">
       {/* Output first, form fields below — so the current job's progress or
@@ -144,7 +197,10 @@ export function Krea2GenerateTab() {
 
       {gen.status === 'running' && (
         <div className="status-panel">
-          <div className="status-title">Oluşturuluyor…</div>
+          <div className="status-panel-header-row">
+            <div className="status-title">Oluşturuluyor…</div>
+            <ResultCarousel urls={historyUrls} kind="image" onOpen={setViewerUrl} compact />
+          </div>
           <GenerationPreview previewUrl={gen.previewUrl} progress={gen.samplingProgress} />
           <div className="status-row">
             <span>Geçen süre</span>
@@ -164,14 +220,21 @@ export function Krea2GenerateTab() {
         <div className="status-panel status-panel-done">
           <div className="status-title">✓ Üretim Tamamlandı</div>
           {gen.totalElapsedSeconds !== null && <div className="status-row">Toplam süre: {gen.totalElapsedSeconds} sn</div>}
-          <ResultCarousel
-            key={gen.result.promptId}
-            urls={gen.result.urls}
-            kind="image"
-            onOpen={(i) => setViewerUrl(gen.result?.urls[i] ?? null)}
-          />
+          <ResultCarousel key={gen.result.promptId} urls={historyUrls} kind="image" onOpen={setViewerUrl} />
         </div>
       )}
+
+      <div className="field">
+        <label className="field-label">Model</label>
+        <select value={settings.unetName} onChange={(e) => update('unetName', e.target.value)} disabled={objectInfo.loading}>
+          {!objectInfo.krea2UnetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
+          {objectInfo.krea2UnetNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <div className="field">
         <label className="field-label">Prompt</label>
@@ -181,17 +244,6 @@ export function Krea2GenerateTab() {
           value={settings.prompt}
           onChange={(e) => update('prompt', e.target.value)}
           placeholder="Görselde ne olmasını istediğini yaz…"
-        />
-      </div>
-
-      <div className="field">
-        <label className="field-label">Negatif Prompt</label>
-        <textarea
-          className="prompt-textarea"
-          rows={3}
-          value={settings.negativePrompt}
-          onChange={(e) => update('negativePrompt', e.target.value)}
-          placeholder="İstemediğin şeyler…"
         />
       </div>
 
@@ -220,21 +272,21 @@ export function Krea2GenerateTab() {
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Batch Size (tek işte üretilecek görsel sayısı)</label>
+          <label className="field-label">Batch Size</label>
           <NumberField min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Batch Count (arka arkaya üretilecek iş sayısı)</label>
+          <label className="field-label">Batch Count</label>
           <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
         </div>
       </div>
-      {(settings.batchSize > 1 || settings.batchCount > 1) && (
-        <span className="field-hint">
-          {settings.batchCount > 1
-            ? `${settings.batchCount} ayrı iş art arda kuyruğa eklenecek, her biri ${settings.batchSize} görsel üretecek (toplam ${settings.batchSize * settings.batchCount} görsel).`
-            : `${settings.batchSize} görsel tek seferde üretilecek — sonuç kartında hepsi gösterilir, hepsi Galeri'de de görünür.`}
-        </span>
-      )}
+      <span className="field-hint">
+        {settings.batchCount > 1
+          ? `${settings.batchCount} ayrı iş art arda kuyruğa eklenecek, her biri ${settings.batchSize} görsel üretecek (toplam ${settings.batchSize * settings.batchCount} görsel).`
+          : settings.batchSize > 1
+            ? `${settings.batchSize} görsel tek seferde üretilecek — sonuç kartında hepsi gösterilir, hepsi Galeri'de de görünür.`
+            : 'Batch Size: tek işte kaç görsel üretilecek. Batch Count: kaç ayrı iş art arda kuyruğa eklenecek.'}
+      </span>
 
       <div className="field">
         <label className="field-label">Seed</label>
@@ -258,6 +310,72 @@ export function Krea2GenerateTab() {
 
       <LoraList loras={settings.loras} loraNames={objectInfo.loraNames} onChange={updateLora} />
 
+      <CollapsibleSection title="Gelişmiş Ayarlar">
+        <span className="field-hint">Bu workflow iki geçişli olduğu için her ayar da ayrı ayrı — 1. Geçiş ve 2. Geçiş kendi sampler/scheduler/denoise'una sahip.</span>
+
+        <div className="field-row">
+          <div className="field">
+            <label className="field-label">Sampler (1. Geçiş)</label>
+            <select value={settings.samplerName1} onChange={(e) => update('samplerName1', e.target.value)} disabled={objectInfo.loading}>
+              {!objectInfo.krea2SamplerNames.includes(settings.samplerName1) && (
+                <option value={settings.samplerName1}>{settings.samplerName1}</option>
+              )}
+              {objectInfo.krea2SamplerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label">Scheduler (1. Geçiş)</label>
+            <select value={settings.scheduler1} onChange={(e) => update('scheduler1', e.target.value)} disabled={objectInfo.loading}>
+              {!objectInfo.schedulerNames.includes(settings.scheduler1) && <option value={settings.scheduler1}>{settings.scheduler1}</option>}
+              {objectInfo.schedulerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="field">
+          <label className="field-label">Denoise (1. Geçiş)</label>
+          <NumberField min={0} max={1} step={0.01} value={settings.denoise1} onChange={(v) => update('denoise1', v)} />
+        </div>
+
+        <div className="field-row">
+          <div className="field">
+            <label className="field-label">Sampler (2. Geçiş)</label>
+            <select value={settings.samplerName2} onChange={(e) => update('samplerName2', e.target.value)} disabled={objectInfo.loading}>
+              {!objectInfo.krea2SamplerNames.includes(settings.samplerName2) && (
+                <option value={settings.samplerName2}>{settings.samplerName2}</option>
+              )}
+              {objectInfo.krea2SamplerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label">Scheduler (2. Geçiş)</label>
+            <select value={settings.scheduler2} onChange={(e) => update('scheduler2', e.target.value)} disabled={objectInfo.loading}>
+              {!objectInfo.schedulerNames.includes(settings.scheduler2) && <option value={settings.scheduler2}>{settings.scheduler2}</option>}
+              {objectInfo.schedulerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="field">
+          <label className="field-label">Denoise (2. Geçiş)</label>
+          <NumberField min={0} max={1} step={0.01} value={settings.denoise2} onChange={(v) => update('denoise2', v)} />
+        </div>
+      </CollapsibleSection>
+
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
       <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
@@ -266,9 +384,9 @@ export function Krea2GenerateTab() {
 
       {viewerUrl !== null && (
         <GenerationFullscreenViewer
-          items={completedResults.map((r) => ({ url: r.url, kind: 'image' as const }))}
-          index={completedResults.findIndex((r) => r.url === viewerUrl)}
-          onIndexChange={(i) => setViewerUrl(completedResults[i]?.url ?? null)}
+          items={historyUrls.map((url) => ({ url, kind: 'image' as const }))}
+          index={historyUrls.indexOf(viewerUrl)}
+          onIndexChange={(i) => setViewerUrl(historyUrls[i] ?? null)}
           onClose={() => setViewerUrl(null)}
         />
       )}

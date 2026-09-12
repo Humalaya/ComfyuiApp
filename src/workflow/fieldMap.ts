@@ -12,7 +12,14 @@ export const NODE_IDS = {
   framerate: '149',
   model: '646',
   totalSteps: '750',
-  inputImage: '687',
+  // MiniMaxH3ImageToVideo itself — first_frame/last_frame are added to (or
+  // deleted from) *this* node's inputs by buildWorkflow, not written as a
+  // value on it, so it needs its own entry separate from the two loaders below.
+  imageToVideo: '644',
+  inputImage: '687', // "Picture 1" — LoadImageCrop feeding first_frame
+  lastFrameImage: '900', // "Picture 2" — LoadImageCrop feeding last_frame
+  samplerSelect: '123', // KSamplerSelect — sampler_name
+  schedulerNode: '124', // BasicScheduler — scheduler + denoise
   loraLoader: '674',
 } as const
 
@@ -37,7 +44,23 @@ export interface GenerationSettings {
   framerate: number
   unetName: string
   totalSteps: number
+  samplerName: string
+  scheduler: string
+  denoise: number
+  // "Picture 1" (first_frame) — the difference between txt2vid and img2vid
+  // for this node is purely whether first_frame is wired at all (confirmed
+  // via MiniMaxH3ImageToVideo's own /object_info: it's an *optional* input,
+  // completely absent from the node's inputs when not connected — there's no
+  // "off" value for an IMAGE input). inputImageEnabled is what actually
+  // decides that; inputImage itself just remembers the last picked image so
+  // toggling back on doesn't lose it.
   inputImage: { filename: string; subfolder: string; type: string } | null
+  inputImageEnabled: boolean
+  // "Picture 2" (last_frame) — same idea, second/end reference frame. Wiring
+  // both first_frame and last_frame at once is first-last-frame
+  // interpolation; wiring only one is a plain single-image start frame.
+  lastFrameImage: { filename: string; subfolder: string; type: string } | null
+  lastFrameEnabled: boolean
   loras: LoraSlot[]
   // UI-only, like fixedSeed — this workflow's MiniMaxH3ImageToVideo node has
   // no batch_size input at all (checked via ComfyUI's own /object_info), so
@@ -72,7 +95,15 @@ export function getDefaultSettings(): GenerationSettings {
     framerate: Number(t[NODE_IDS.framerate].inputs.value ?? 24),
     unetName: String(t[NODE_IDS.model].inputs.unet_name ?? ''),
     totalSteps: Number(t[NODE_IDS.totalSteps].inputs.value ?? 10),
+    samplerName: String(t[NODE_IDS.samplerSelect].inputs.sampler_name ?? 'euler'),
+    scheduler: String(t[NODE_IDS.schedulerNode].inputs.scheduler ?? 'simple'),
+    denoise: Number(t[NODE_IDS.schedulerNode].inputs.denoise ?? 1),
+    // Defaults to OFF — a fresh install (or a "Varsayılana Sıfırla") starts
+    // as pure txt2vid, matching what "off" actually means for this node.
     inputImage: null,
+    inputImageEnabled: false,
+    lastFrameImage: null,
+    lastFrameEnabled: false,
     loras: readLoraSlots(),
     batchCount: 1,
   }
@@ -89,14 +120,34 @@ export function buildWorkflow(settings: GenerationSettings): ComfyWorkflow {
   workflow[NODE_IDS.framerate].inputs.value = settings.framerate
   workflow[NODE_IDS.model].inputs.unet_name = settings.unetName
   workflow[NODE_IDS.totalSteps].inputs.value = settings.totalSteps
-  // Denoise is intentionally not user-editable — left at the workflow's own
-  // baked-in default (1, i.e. full-strength) rather than exposed in the UI.
+  workflow[NODE_IDS.samplerSelect].inputs.sampler_name = settings.samplerName
+  workflow[NODE_IDS.schedulerNode].inputs.scheduler = settings.scheduler
+  workflow[NODE_IDS.schedulerNode].inputs.denoise = settings.denoise
 
-  if (settings.inputImage) {
+  // first_frame/last_frame are *optional* IMAGE inputs on MiniMaxH3ImageToVideo
+  // — there's no "disabled" value for them, the key has to be entirely absent
+  // from the node's inputs for txt2vid to actually happen (see
+  // GenerationSettings.inputImageEnabled's comment). The template's own
+  // baked-in default always has first_frame wired to node 687 regardless —
+  // deleting it here every time it's off is what actually fixes txt2vid
+  // instead of it silently img2vid-ing off whatever was last uploaded.
+  const imageToVideoInputs = workflow[NODE_IDS.imageToVideo].inputs
+  if (settings.inputImageEnabled && settings.inputImage) {
     // LoadImageCrop expects just the filename ComfyUI's /upload/image returned
     // (subfolder-qualified as "subfolder/filename" when not the root input dir).
     const { filename, subfolder } = settings.inputImage
     workflow[NODE_IDS.inputImage].inputs.image = subfolder ? `${subfolder}/${filename}` : filename
+    imageToVideoInputs.first_frame = [NODE_IDS.inputImage, 0]
+  } else {
+    delete imageToVideoInputs.first_frame
+  }
+
+  if (settings.lastFrameEnabled && settings.lastFrameImage) {
+    const { filename, subfolder } = settings.lastFrameImage
+    workflow[NODE_IDS.lastFrameImage].inputs.image = subfolder ? `${subfolder}/${filename}` : filename
+    imageToVideoInputs.last_frame = [NODE_IDS.lastFrameImage, 0]
+  } else {
+    delete imageToVideoInputs.last_frame
   }
 
   const loraInputs = workflow[NODE_IDS.loraLoader].inputs

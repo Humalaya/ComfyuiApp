@@ -6,7 +6,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // exactly like today; there's no separate "app build" step to keep in sync,
 // only the one-time APK build below. If your PC's LAN IP changes, update it
 // here and rebuild the APK.
-const DEV_SERVER_URL = 'http://192.168.1.65:5173';
+const DEV_SERVER_URL = 'http://192.168.1.62:5173';
 
 const config: CapacitorConfig = {
   appId: 'com.emir.minimaxcontrol',

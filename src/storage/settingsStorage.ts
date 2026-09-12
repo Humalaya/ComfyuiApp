@@ -40,11 +40,14 @@ function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
 // Rebuilds a fully-valid GenerationSettings from untrusted parsed JSON,
 // field by field — anything missing, mistyped, or from an incompatible
 // schema silently falls back to the matching default instead of corrupting
-// the whole form or crashing the app. Exported so queueStorage.ts can apply
-// the exact same validation to each item of a persisted queue.
+// the whole form or crashing the app. Exported so App.tsx can hand this to
+// remoteQueueStorage.ts's loadRemoteQueue, applying the exact same
+// validation to each item of a persisted queue as a normal settings load gets.
 export function normalizeSettings(raw: unknown, defaults: GenerationSettings = getDefaultSettings()): GenerationSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const r = raw as Partial<GenerationSettings>
+  const inputImage = isInputImage(r.inputImage) ? r.inputImage : defaults.inputImage
+  const lastFrameImage = isInputImage(r.lastFrameImage) ? r.lastFrameImage : defaults.lastFrameImage
   return {
     prompt: typeof r.prompt === 'string' ? r.prompt : defaults.prompt,
     seed: typeof r.seed === 'number' && Number.isFinite(r.seed) ? r.seed : defaults.seed,
@@ -56,7 +59,17 @@ export function normalizeSettings(raw: unknown, defaults: GenerationSettings = g
     framerate: typeof r.framerate === 'number' && Number.isFinite(r.framerate) ? r.framerate : defaults.framerate,
     unetName: typeof r.unetName === 'string' ? r.unetName : defaults.unetName,
     totalSteps: typeof r.totalSteps === 'number' && Number.isFinite(r.totalSteps) ? r.totalSteps : defaults.totalSteps,
-    inputImage: isInputImage(r.inputImage) ? r.inputImage : defaults.inputImage,
+    samplerName: typeof r.samplerName === 'string' ? r.samplerName : defaults.samplerName,
+    scheduler: typeof r.scheduler === 'string' ? r.scheduler : defaults.scheduler,
+    denoise: typeof r.denoise === 'number' && Number.isFinite(r.denoise) ? r.denoise : defaults.denoise,
+    inputImage,
+    // Migrating a record saved before this toggle existed: if it already had
+    // an image picked, that almost certainly meant "yes, use it" — defaults
+    // to that instead of the normal off-by-default so upgrading doesn't
+    // silently turn an existing img2vid setup back into txt2vid.
+    inputImageEnabled: typeof r.inputImageEnabled === 'boolean' ? r.inputImageEnabled : inputImage !== null,
+    lastFrameImage,
+    lastFrameEnabled: typeof r.lastFrameEnabled === 'boolean' ? r.lastFrameEnabled : lastFrameImage !== null,
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, LORA_SLOT_COUNT),
     batchCount: typeof r.batchCount === 'number' && Number.isFinite(r.batchCount) ? r.batchCount : defaults.batchCount,
   }

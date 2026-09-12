@@ -1,0 +1,23 @@
+[Unit]
+Description=MiniMax H3 Mobil Kontrol paneli (Vite dev + output-server)
+# Ağ hazır olmadan npm/vite başlarsa LAN'da dinleyemez.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/emir/Desktop/mobile-control
+
+# systemd kullanıcı servisleri neredeyse boş bir PATH ile başlar; node/npm
+# nvm altında olduğu için tam yolu vermek şart. nvm ile node sürümünü
+# değiştirirsen aşağıdaki iki satırdaki v24.14.0 kısmını güncelle
+# (`nvm which current` çıktısına bak).
+Environment=PATH=/home/emir/.nvm/versions/node/v24.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/emir/.nvm/versions/node/v24.14.0/bin/npm run dev
+
+# Çökerse (port çakışması, geçici hata) kendini toparlasın.
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

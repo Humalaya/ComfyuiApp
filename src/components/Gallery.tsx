@@ -1,24 +1,53 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOutputBrowser, useOutputSources } from '../hooks/useOutputBrowser'
-import { outputDownloadUrl, outputFileUrl, outputThumbnailUrl, type OutputFile } from '../api/outputsClient'
-import { extractA1111PositivePrompt, extractShareableMetadataText, readPngTextChunks } from '../utils/pngMetadata'
+import { outputFileUrl, outputThumbnailUrl, type OutputFile } from '../api/outputsClient'
+import { extractA1111PositivePrompt, extractShareableMetadataText, parseComfyWorkflowJson, readPngTextChunks } from '../utils/pngMetadata'
 import { extractSettingsFromPrompt } from '../workflow/pngImport'
+import { extractImageSettingsFromPrompt } from '../workflow/imagePngImport'
+import { extractKrea2SettingsFromPrompt } from '../workflow/krea2PngImport'
 import { uploadImage, type ComfyWorkflow } from '../api/comfyClient'
 import type { GenerationSettings } from '../workflow/fieldMap'
+import type { ImageGenerationSettings } from '../workflow/imageFieldMap'
+import type { Krea2GenerationSettings } from '../workflow/krea2FieldMap'
 import { FullscreenViewer } from './FullscreenViewer'
 import { MetadataModal } from './MetadataModal'
 
 const PAGE_SIZE = 60
 
+// Which of the three Create tabs a recognized settings payload targets — a
+// Gallery source maps 1:1 onto one of these (see KIND_BY_SOURCE below), since
+// each source is already rooted at exactly one generation type's own output
+// folder. Keeping this a real discriminated union (kind travels together
+// with its matching settings shape) rather than a loose kind+settings pair
+// is what lets App.tsx route each one to the right tab/state without a cast.
+export type ImportPayload =
+  | { kind: 'video'; settings: Partial<GenerationSettings> }
+  | { kind: 'sdxl'; settings: Partial<ImageGenerationSettings> }
+  | { kind: 'krea2'; settings: Partial<Krea2GenerationSettings> }
+
+// Gallery source id -> which Create tab its metadata should populate. Kept
+// as its own map (rather than just reusing the source id as the kind
+// directly) since the ids don't quite line up: the Krea Gallery source is
+// 'krea' but the Create tab/settings shape is 'krea2' (see krea2FieldMap.ts
+// for why the "2" — Krea2/FLUX — is part of that name but not the folder).
+const KIND_BY_SOURCE: Record<string, ImportPayload['kind']> = {
+  video: 'video',
+  sdxl: 'sdxl',
+  krea: 'krea2',
+}
+
 interface MetadataState {
   title: string
   text: string
-  settingsToSend: Partial<GenerationSettings> | null
+  // null when nothing recognized — the metadata text itself may still be
+  // worth showing (e.g. a Forge/A1111 PNG's "parameters" text with no node
+  // graph to map settings from).
+  payload: ImportPayload | null
   imageBlob: Blob | null
 }
 
 interface Props {
-  onSendToCreate: (settings: Partial<GenerationSettings>) => void
+  onSendToCreate: (payload: ImportPayload) => void
 }
 
 function formatDate(mtimeMs: number): string {
@@ -36,7 +65,11 @@ function folderLabel(fullPath: string): string {
 
 export function Gallery({ onSendToCreate }: Props) {
   const { sources, loading: sourcesLoading } = useOutputSources()
-  const [source, setSource] = useState('comfyui')
+  // 'video' first/default — matches the tab order (Video, Krea, SDXL) and
+  // this app's own "video generation" starting point. The effect below
+  // corrects this to whatever the server actually reports if 'video' isn't
+  // among the configured sources.
+  const [source, setSource] = useState('video')
   const [currentPath, setCurrentPath] = useState('')
   const { folders, items, loading, error, refresh } = useOutputBrowser(source, currentPath)
   // An index into `items` rather than the item itself — that's what makes
@@ -53,7 +86,7 @@ export function Gallery({ onSendToCreate }: Props) {
   // The subfolder path you just came *up* from, so it can be highlighted in
   // its parent's folder list — a plain "Geri" with no other cue made it easy
   // to lose track of which folder you were just in, especially in a source
-  // with hundreds of same-looking dated folders (Forge).
+  // with hundreds of same-looking dated folders.
   const [justLeftPath, setJustLeftPath] = useState<string | null>(null)
 
   // Restores scroll position on "Geri"/folder navigation instead of always
@@ -123,36 +156,47 @@ export function Gallery({ onSendToCreate }: Props) {
     })
   }
 
-  async function handleMetadata(item: OutputFile, e: MouseEvent) {
-    e.stopPropagation()
+  // No click-event param — callers that need to stop it bubbling into a
+  // wrapping tile's own onClick (the grid) do that themselves; the fullscreen
+  // viewer's button isn't nested inside anything it'd need to stop.
+  async function loadMetadata(item: OutputFile) {
     setMetadataLoadingName(item.name)
+    // Which Create tab this PNG's settings (if any are recognized) target —
+    // decided by which Gallery source it came from, since each source is
+    // already rooted at exactly one generation type's own folder.
+    const kind = KIND_BY_SOURCE[source] ?? 'video'
     try {
       const res = await fetch(outputFileUrl(source, item.name))
       const blob = await res.blob()
       const chunks = await readPngTextChunks(blob)
       const text = extractShareableMetadataText(chunks)
 
-      let settingsToSend: Partial<GenerationSettings> | null = null
+      let payload: ImportPayload | null = null
       if (chunks.prompt) {
         // ComfyUI-style: the full API workflow JSON — reuse the exact same
-        // class_type/title mapping as the "Import PNG" feature on the Create
-        // screen, so a video-workflow PNG fills in everything it recognizes.
+        // class_type/title mapping as the "Import PNG" feature on each
+        // Create tab, so a PNG from that workflow family fills in everything
+        // it recognizes. Each family has its own extractor since the three
+        // workflows share almost no node identities with each other.
         try {
-          const workflow = JSON.parse(chunks.prompt) as ComfyWorkflow
-          settingsToSend = extractSettingsFromPrompt(workflow).settings
+          const workflow = parseComfyWorkflowJson(chunks.prompt) as ComfyWorkflow
+          if (kind === 'video') payload = { kind, settings: extractSettingsFromPrompt(workflow).settings }
+          else if (kind === 'sdxl') payload = { kind, settings: extractImageSettingsFromPrompt(workflow).settings }
+          else payload = { kind, settings: extractKrea2SettingsFromPrompt(workflow).settings }
         } catch {
-          // malformed JSON — leave settingsToSend null, metadata text is still shown
+          // malformed JSON — leave payload null, metadata text is still shown
         }
       } else if (chunks.parameters) {
-        // A1111/Forge: no node graph to map onto this app's workflow, but the
-        // positive prompt text alone is still worth carrying over.
+        // A1111/Forge: no node graph to map onto any of this app's three
+        // workflows, but the positive prompt text alone is still worth
+        // carrying over — `prompt` is a field on all three settings shapes.
         const prompt = extractA1111PositivePrompt(chunks.parameters)
-        if (prompt) settingsToSend = { prompt }
+        if (prompt) payload = { kind, settings: { prompt } } as ImportPayload
       }
 
-      setMetadata({ title: item.name, text: text ?? 'Bu PNG içinde tanınan bir metadata bulunamadı.', settingsToSend, imageBlob: blob })
+      setMetadata({ title: item.name, text: text ?? 'Bu PNG içinde tanınan bir metadata bulunamadı.', payload, imageBlob: blob })
     } catch (err) {
-      setMetadata({ title: item.name, text: `Metadata okunamadı: ${(err as Error).message}`, settingsToSend: null, imageBlob: null })
+      setMetadata({ title: item.name, text: `Metadata okunamadı: ${(err as Error).message}`, payload: null, imageBlob: null })
     } finally {
       setMetadataLoadingName(null)
     }
@@ -164,16 +208,30 @@ export function Gallery({ onSendToCreate }: Props) {
     return { filename: uploaded.name, subfolder: uploaded.subfolder, type: uploaded.type }
   }
 
-  // Sends the recognized settings *together with* this exact PNG as the
-  // input image — not whatever stale reference image the historical
-  // metadata might point to. Reusing a past output as the next starting
-  // frame is the whole point of sending settings from the gallery.
+  // Sends the recognized settings to whichever Create tab they target. Only
+  // the video tab has an inputImage concept at all (SDXL/Krea2 are pure
+  // Text2Img, no image input) — for that one, this exact PNG is attached as
+  // the input image too, rather than whatever stale reference image the
+  // historical metadata might point to; reusing a past output as the next
+  // starting frame is the whole point of sending settings from the gallery.
   async function handleSendSettings() {
-    if (!metadata?.settingsToSend) return
+    if (!metadata?.payload) return
     setSendingAction('settings')
     try {
-      const inputImage = await uploadCurrentImage()
-      onSendToCreate({ ...metadata.settingsToSend, ...(inputImage ? { inputImage } : null) })
+      if (metadata.payload.kind === 'video') {
+        const inputImage = await uploadCurrentImage()
+        // inputImageEnabled has to be flipped on here too, not just
+        // inputImage itself — buildWorkflow() only wires first_frame into the
+        // workflow when *both* are set (see fieldMap.ts), so without this the
+        // image lands in settings/state but a generate() right after still
+        // silently runs as txt2vid, using none of what was just "sent".
+        onSendToCreate({
+          kind: 'video',
+          settings: { ...metadata.payload.settings, ...(inputImage ? { inputImage, inputImageEnabled: true } : null) },
+        })
+      } else {
+        onSendToCreate(metadata.payload)
+      }
       setMetadata(null)
     } catch (err) {
       alert(`Gönderilemedi: ${(err as Error).message}`)
@@ -183,16 +241,20 @@ export function Gallery({ onSendToCreate }: Props) {
   }
 
   // Uploads this exact PNG to ComfyUI's input folder and sets it as the
-  // Create screen's input image — independent of whatever settings/prompt
-  // metadata it may or may not carry. Mainly useful for Forge-sourced images,
-  // which have no node graph this workflow can map settings from, but are
-  // still perfectly usable as an image-to-video starting frame.
+  // *video* tab's input image — independent of whatever settings/prompt
+  // metadata it may or may not carry, and independent of which source it
+  // came from (SDXL/Krea2 images make perfectly good video starting frames
+  // too, they just have no settings of their own to carry over the same way
+  // an image-to-video PNG's would). Always targets 'video' since that's the
+  // only one of the three Create tabs with an image-input concept at all.
   async function handleSendImageOnly() {
     if (!metadata?.imageBlob) return
     setSendingAction('image')
     try {
       const inputImage = await uploadCurrentImage()
-      onSendToCreate({ inputImage })
+      // Same reasoning as handleSendSettings above — enabling the toggle is
+      // what actually makes buildWorkflow() use this image at all.
+      onSendToCreate({ kind: 'video', settings: { inputImage, inputImageEnabled: true } })
       setMetadata(null)
     } catch (err) {
       alert(`Görsel gönderilemedi: ${(err as Error).message}`)
@@ -227,6 +289,8 @@ export function Gallery({ onSendToCreate }: Props) {
       <button type="button" className="secondary-button" onClick={refresh} disabled={loading}>
         {loading ? 'Yükleniyor…' : '🔄 Yenile'}
       </button>
+
+      <span className="field-hint">Kaydetmek/paylaşmak için bir dosyaya dokunup büyütün, sonra üzerine uzun basın.</span>
 
       {error && <div className="field-error">{error}</div>}
       {!loading && !error && folders.length === 0 && items.length === 0 && (
@@ -273,19 +337,14 @@ export function Gallery({ onSendToCreate }: Props) {
               </span>
             </div>
             <div className="gallery-actions">
-              <a
-                className="gallery-download"
-                href={outputDownloadUrl(source, item.name)}
-                onClick={(e) => e.stopPropagation()}
-                aria-label={`${item.name} indir`}
-              >
-                ⬇ İndir
-              </a>
               {item.ext === '.png' && (
                 <button
                   type="button"
                   className="gallery-metadata-button"
-                  onClick={(e) => handleMetadata(item, e)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    loadMetadata(item)
+                  }}
                   disabled={metadataLoadingName === item.name}
                 >
                   {metadataLoadingName === item.name ? '…' : '📋 Metadata'}
@@ -310,12 +369,17 @@ export function Gallery({ onSendToCreate }: Props) {
         onPrev={() => setActiveIndex((i) => (i !== null && i > 0 ? i - 1 : i))}
         onNext={() => setActiveIndex((i) => (i !== null && i < items.length - 1 ? i + 1 : i))}
         onClose={() => setActiveIndex(null)}
+        onMetadata={activeItem?.ext === '.png' ? () => loadMetadata(activeItem) : undefined}
       />
       <MetadataModal
         title={metadata?.title ?? null}
         text={metadata?.text ?? null}
         onClose={() => setMetadata(null)}
-        onSendToCreate={metadata?.settingsToSend ? handleSendSettings : undefined}
+        onSendToCreate={metadata?.payload ? handleSendSettings : undefined}
+        // Only the video tab gets this exact PNG attached as its input image
+        // too (see handleSendSettings) — the button text should say so only
+        // when that's actually what's about to happen.
+        sendSettingsLabel={metadata?.payload?.kind === 'video' ? '📝 Ayarları + Resmi Gönder' : '📝 Ayarları Gönder'}
         sendingSettings={sendingAction === 'settings'}
         onSendImageOnly={metadata?.imageBlob ? handleSendImageOnly : undefined}
         sendingImage={sendingAction === 'image'}

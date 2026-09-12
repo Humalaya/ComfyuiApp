@@ -1,4 +1,6 @@
-// Minimal backend for the mobile control panel's Output Browser.
+// Minimal backend for the mobile control panel's Output Browser (plus a
+// small in-memory generation-state store, see the /api/state/* routes near
+// the bottom).
 //
 // This process is completely separate from ComfyUI itself — it only reads
 // (never writes) files inside configured output folders so the phone can
@@ -6,12 +8,15 @@
 // workflow files, or its custom nodes. ComfyUI's own REST/WebSocket API is
 // still called directly by the frontend via the Vite proxy (see
 // vite.config.ts) — this server has nothing to do with /prompt, /history or
-// the generation flow.
+// the generation flow *itself*; it only remembers what the phone last told
+// it about the client-side queue/active-job bookkeeping around that flow.
 import 'dotenv/config'
 import express from 'express'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import crypto from 'node:crypto'
+import net from 'node:net'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
@@ -19,14 +24,51 @@ import sharp from 'sharp'
 // Every browsable output folder is a named "source". Add more here (plus a
 // matching env var) to browse additional tools' output directories — each
 // one is fully isolated to its own root, same path-traversal guarantees.
+//
+// One source per generation type (Video/Krea/SDXL) rather than one "ComfyUI"
+// source rooted at the whole output/ folder — each root points straight at
+// that type's own subfolder (see the corresponding filename_prefix in
+// template.json/krea2Template.json/imageTemplate.json), so opening a tab
+// lands directly on that type's own date folders instead of having to
+// navigate into image/video/krea from a shared root first. Forge's own
+// output folder isn't a distinct generation type of this app's, so it's not
+// one of these — browsing it from here was never anything more than a
+// leftover convenience from before this split existed.
 const SOURCE_DEFS = [
-  { id: 'comfyui', label: 'ComfyUI', envVar: 'COMFYUI_OUTPUT_DIR' },
-  { id: 'forge', label: 'Forge', envVar: 'FORGE_OUTPUT_DIR' },
+  { id: 'video', label: 'Video', envVar: 'VIDEO_OUTPUT_DIR' },
+  { id: 'krea', label: 'Krea', envVar: 'KREA_OUTPUT_DIR' },
+  { id: 'sdxl', label: 'SDXL', envVar: 'SDXL_OUTPUT_DIR' },
 ]
 const SOURCES = SOURCE_DEFS.map((s) => {
   const dir = process.env[s.envVar]
   return { ...s, root: dir ? path.resolve(dir) : null }
 })
+
+// LoRA folder — separate from SOURCES above (those are *outputs*, this is
+// ComfyUI's own models/loras) — used only by the Civitai lookup endpoint
+// below to resolve a lora name (as reported by ComfyUI's own LoraLoader
+// combo, e.g. "MinimaxH3/foo.safetensors") to an actual file to hash.
+const LORA_ROOT = process.env.COMFYUI_LORA_DIR ? path.resolve(process.env.COMFYUI_LORA_DIR) : null
+
+// Optional — civitai.com/api/v1/model-versions/by-hash/ works unauthenticated
+// for most models (confirmed even for NSFW-tagged ones), but some content is
+// only fully visible with a key attached. Free to create at
+// civitai.com/user/account under "API Keys".
+const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY || null
+
+// "Ayarlar" (Settings) tab — three "this box, from the couch" conveniences,
+// see the /api/system/* routes near the bottom. Same trust model as the rest
+// of this server: no auth, reachable only by whoever can already reach the
+// LAN it's on.
+//   - llama-swap (its own web UI lives at :8080) — flip a model on/off
+//   - start-all.sh — (re)start the ComfyUI + control-panel stack
+//   - the machine itself — full power-off
+const LLAMA_SWAP_URL = (process.env.LLAMA_SWAP_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '')
+const START_ALL_SCRIPT = process.env.START_ALL_SCRIPT || '/home/emir/Desktop/ComfyUI/start-all.sh'
+// ComfyUI's own listen port (start-all.sh runs `main.py --listen 0.0.0.0`
+// with ComfyUI's default 8188) — probed so the Settings tab can show whether
+// ComfyUI is actually up regardless of who started it.
+const COMFYUI_PROBE_PORT = Number(process.env.COMFYUI_PROBE_PORT || 8188)
 
 const PORT = Number(process.env.OUTPUT_SERVER_PORT || 5175)
 
@@ -80,6 +122,71 @@ function runQueued(task) {
 function drainRemuxQueue() {
   while (activeRemuxCount < MAX_CONCURRENT_REMUX && remuxQueue.length > 0) {
     remuxQueue.shift()()
+  }
+}
+
+// Civitai lookup results, cached to disk so this survives a server restart —
+// hashing a several-hundred-MB lora file and round-tripping to Civitai isn't
+// something worth redoing every time the LoRA grid is opened. Keyed by the
+// lora's relative path (what the client sends); each entry also records the
+// file's mtime/size at hash time, so replacing a file on disk (same name,
+// different content) doesn't keep serving the old file's stale result.
+const CIVITAI_CACHE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cache', 'civitai-cache.json')
+let civitaiCache = {}
+try {
+  civitaiCache = JSON.parse(await fs.readFile(CIVITAI_CACHE_PATH, 'utf8'))
+} catch {
+  // no cache yet, or unreadable — starts empty either way
+}
+let civitaiCacheSaveQueued = false
+function saveCivitaiCacheSoon() {
+  // Coalesces bursts of writes (e.g. a fresh LoRA grid with several missing
+  // thumbnails resolving in quick succession) into one disk write instead of
+  // one per lookup.
+  if (civitaiCacheSaveQueued) return
+  civitaiCacheSaveQueued = true
+  setTimeout(() => {
+    civitaiCacheSaveQueued = false
+    fs.mkdir(path.dirname(CIVITAI_CACHE_PATH), { recursive: true })
+      .then(() => fs.writeFile(CIVITAI_CACHE_PATH, JSON.stringify(civitaiCache)))
+      .catch((err) => console.warn('[output-server] civitai cache write failed:', err.message))
+  }, 1000)
+}
+
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256')
+    const stream = fsSync.createReadStream(filePath)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('end', () => resolve(hash.digest('hex')))
+    stream.on('error', reject)
+  })
+}
+
+// Looks up a lora by content hash — Civitai's own recommended way to match a
+// local file to its model page, since filenames alone are unreliable (people
+// rename downloads constantly). A 404 here genuinely means "not on Civitai
+// at all" (e.g. a personally-trained lora), not an error.
+async function lookupCivitaiByHash(hash) {
+  const headers = CIVITAI_API_KEY ? { Authorization: `Bearer ${CIVITAI_API_KEY}` } : {}
+  const res = await fetch(`https://civitai.com/api/v1/model-versions/by-hash/${hash}`, { headers })
+  if (res.status === 404) return { found: false, imageUrl: null, triggerWords: [], modelName: null }
+  if (!res.ok) throw new Error(`Civitai API ${res.status}`)
+  const data = await res.json()
+  // Some model versions (this MiniMax H3 lora among them) only carry *video*
+  // showcase clips in `images`, no static image at all — falling back to
+  // images[0] regardless of type used to hand the client an .mp4 URL under
+  // "imageUrl", which it then tried to render as an <img> and silently
+  // failed to decode (indistinguishable from "nothing found" in the UI).
+  // Only an actual `type: 'image'` entry counts now; genuinely
+  // image-less-but-matched loras correctly get imageUrl: null instead of a
+  // URL that was never going to render.
+  const image = data.images?.find((im) => im.type === 'image') ?? null
+  return {
+    found: true,
+    imageUrl: image?.url ?? null,
+    triggerWords: Array.isArray(data.trainedWords) ? data.trainedWords : [],
+    modelName: data.model?.name ?? null,
   }
 }
 
@@ -164,8 +271,8 @@ function sendError(res, err, fallbackMessage) {
 }
 
 // Lists exactly one directory level — folders and media files, never
-// recursing — so a source organized into subfolders (e.g. Forge's
-// txt2img-images/<date>/) is browsed folder-by-folder instead of being
+// recursing — so a source organized into subfolders (e.g. each generation
+// type's own <date>/ subfolder) is browsed folder-by-folder instead of being
 // flattened into one giant list. `relPath` (possibly '') is the path already
 // navigated to, relative to the source root; returned names are always
 // relative to the root too, so they plug straight into resolveSafePath.
@@ -267,7 +374,32 @@ async function ensurePlayablePath(filePath, mtimeMs) {
   }
 }
 
+// In-memory only ("the PC's RAM", as opposed to the phone's own
+// localStorage) — a batch queued overnight, or a generation mid-flight, used
+// to live only in the *phone's* browser storage, so closing the phone,
+// clearing site data, or just switching to a different device lost track of
+// it completely even though ComfyUI itself (running on this same PC) was
+// still working through it just fine. Kept here — one always-on process on
+// the same machine as ComfyUI — instead of the phone: whatever's queued or
+// active survives a phone reboot, a different browser, a different device
+// entirely, right up until this server process itself restarts (deliberately
+// not persisted to disk — that's an explicit choice, not a limitation: this
+// is a live work queue, not a record worth keeping across a restart of the
+// thing tracking it).
+const GENERATION_KINDS = ['video', 'sdxl', 'krea2']
+const remoteJobs = Object.fromEntries(GENERATION_KINDS.map((k) => [k, null]))
+const remoteQueues = Object.fromEntries(GENERATION_KINDS.map((k) => [k, []]))
+
+function requireGenerationKind(kind, res) {
+  if (!GENERATION_KINDS.includes(kind)) {
+    res.status(400).json({ error: `Bilinmeyen üretim türü: ${kind}` })
+    return false
+  }
+  return true
+}
+
 const app = express()
+app.use(express.json({ limit: '2mb' })) // only the /api/state/* PUT routes below actually read a body
 
 app.get('/api/outputs/sources', (_req, res) => {
   res.json(SOURCES.map(({ id, label, root }) => ({ id, label, configured: !!root })))
@@ -275,7 +407,7 @@ app.get('/api/outputs/sources', (_req, res) => {
 
 app.get('/api/outputs', async (req, res) => {
   try {
-    const source = findSource(req.query.source || 'comfyui')
+    const source = findSource(req.query.source || 'video')
     const relPath = typeof req.query.path === 'string' ? req.query.path : ''
     const listing = await listDirectory(source.root, relPath)
     res.json(listing)
@@ -286,7 +418,7 @@ app.get('/api/outputs', async (req, res) => {
 
 app.get('/api/outputs/file', async (req, res) => {
   try {
-    const source = findSource(req.query.source || 'comfyui')
+    const source = findSource(req.query.source || 'video')
     const filePath = await resolveSafeRealPath(source.root, req.query.name)
     assertBrowsableExt(filePath)
     const stat = await fs.stat(filePath)
@@ -299,7 +431,7 @@ app.get('/api/outputs/file', async (req, res) => {
 
 app.get('/api/outputs/download', async (req, res) => {
   try {
-    const source = findSource(req.query.source || 'comfyui')
+    const source = findSource(req.query.source || 'video')
     const filePath = await resolveSafeRealPath(source.root, req.query.name)
     assertBrowsableExt(filePath)
     res.download(filePath, path.basename(filePath))
@@ -310,7 +442,7 @@ app.get('/api/outputs/download', async (req, res) => {
 
 app.get('/api/outputs/thumbnail', async (req, res) => {
   try {
-    const source = findSource(req.query.source || 'comfyui')
+    const source = findSource(req.query.source || 'video')
     const filePath = await resolveSafeRealPath(source.root, req.query.name)
     const ext = path.extname(filePath).toLowerCase()
     if (!THUMBNAILABLE_EXT.has(ext)) {
@@ -326,6 +458,215 @@ app.get('/api/outputs/thumbnail', async (req, res) => {
   } catch (err) {
     sendError(res, err, 'Dosya bulunamadı.')
   }
+})
+
+app.get('/api/loras/civitai', async (req, res) => {
+  try {
+    if (!LORA_ROOT) throw new HttpError(503, 'LoRA klasörü yapılandırılmamış (.env: COMFYUI_LORA_DIR).')
+    const name = req.query.name
+    const filePath = await resolveSafeRealPath(LORA_ROOT, name)
+    const stat = await fs.stat(filePath)
+
+    const cached = civitaiCache[name]
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      res.json(cached.result)
+      return
+    }
+
+    const hash = await sha256File(filePath)
+    const result = await lookupCivitaiByHash(hash)
+    civitaiCache[name] = { mtimeMs: stat.mtimeMs, size: stat.size, hash, result }
+    saveCivitaiCacheSoon()
+    res.json(result)
+  } catch (err) {
+    sendError(res, err, 'Civitai bilgisi alınamadı.')
+  }
+})
+
+// The one job currently submitted-to-or-tracked-against ComfyUI for this
+// generation kind, if any — `null` clears it. Body shape: `{ promptId,
+// startedAt } | null`, opaque to this server beyond that minimal check; the
+// client is the one that actually knows how to recover a job's progress from
+// ComfyUI's own /history using this.
+app.get('/api/state/:kind/job', (req, res) => {
+  if (!requireGenerationKind(req.params.kind, res)) return
+  res.json(remoteJobs[req.params.kind])
+})
+
+app.put('/api/state/:kind/job', (req, res) => {
+  if (!requireGenerationKind(req.params.kind, res)) return
+  const body = req.body
+  remoteJobs[req.params.kind] =
+    body && typeof body.promptId === 'string' && body.promptId ? { promptId: body.promptId, startedAt: Number(body.startedAt) || Date.now() } : null
+  res.json({ ok: true })
+})
+
+// The full "still waiting to be submitted" queue for this generation kind —
+// opaque settings objects this server never reads into, just holds and hands
+// back verbatim (the client re-validates each item through its own
+// normalizer on the way back in, the same way it already did coming out of
+// localStorage, in case of a stale/incompatible shape from an older session).
+app.get('/api/state/:kind/queue', (req, res) => {
+  if (!requireGenerationKind(req.params.kind, res)) return
+  res.json(remoteQueues[req.params.kind])
+})
+
+app.put('/api/state/:kind/queue', (req, res) => {
+  if (!requireGenerationKind(req.params.kind, res)) return
+  remoteQueues[req.params.kind] = Array.isArray(req.body) ? req.body : []
+  res.json({ ok: true })
+})
+
+// --- "Ayarlar" tab: llama-swap models / start-all.sh / machine power -------
+
+function llamaSwapFetch(pathname, init, timeoutMs = 8000) {
+  return fetch(`${LLAMA_SWAP_URL}${pathname}`, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+}
+
+// Bare TCP connect check — "is something listening on this port right now".
+// Cheap enough to run on every Settings poll; only ever probes localhost.
+function probePort(port, host = '127.0.0.1', timeoutMs = 700) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host })
+    const finish = (v) => {
+      sock.destroy()
+      resolve(v)
+    }
+    sock.setTimeout(timeoutMs)
+    sock.once('connect', () => finish(true))
+    sock.once('timeout', () => finish(false))
+    sock.once('error', () => finish(false))
+  })
+}
+
+// llama-swap: every configured model + whether it's currently loaded. The
+// per-model `state` ('ready' | 'loading' | ...) comes from /running; a model
+// not in /running at all is reported 'stopped'.
+app.get('/api/system/models', async (_req, res) => {
+  try {
+    const [modelsRes, runningRes] = await Promise.all([llamaSwapFetch('/v1/models'), llamaSwapFetch('/running')])
+    if (!modelsRes.ok) throw new HttpError(502, `llama-swap /v1/models → ${modelsRes.status}`)
+    const models = (await modelsRes.json())?.data ?? []
+    const running = runningRes.ok ? (await runningRes.json())?.running ?? [] : []
+    const stateById = Object.fromEntries(running.map((r) => [r.model, r.state || 'ready']))
+    res.json({
+      url: LLAMA_SWAP_URL,
+      models: models.map((m) => ({
+        id: m.id,
+        name: m.name || m.id,
+        state: stateById[m.id] ?? 'stopped',
+        running: Object.prototype.hasOwnProperty.call(stateById, m.id),
+      })),
+    })
+  } catch (err) {
+    sendError(res, err, 'llama-swap modelleri alınamadı.')
+  }
+})
+
+app.post('/api/system/models/:id/load', (req, res) => {
+  const id = req.params.id
+  // Kick the load and keep the connection open long enough that llama-swap
+  // doesn't read an immediate client disconnect as "gave up" and cancel the
+  // spin-up — but the phone doesn't wait it out: the Settings screen polls
+  // /api/system/models and flips the toggle once the state turns 'ready'.
+  llamaSwapFetch(`/upstream/${encodeURIComponent(id)}/?_=${Date.now()}`, {}, 180000).catch(() => {})
+  res.json({ ok: true })
+})
+
+app.post('/api/system/models/:id/unload', async (req, res) => {
+  try {
+    const r = await llamaSwapFetch(`/api/models/unload/${encodeURIComponent(req.params.id)}`, { method: 'POST' }, 15000)
+    if (!r.ok) throw new HttpError(502, `llama-swap unload → ${r.status}`)
+    res.json({ ok: true })
+  } catch (err) {
+    sendError(res, err, 'Model kapatılamadı.')
+  }
+})
+
+// start-all.sh — spawned in its own process group (detached) so "stop" can
+// signal the whole tree (ComfyUI + the npm dev stack it launches). Only a
+// copy *this* server started is tracked/stoppable; one already running from a
+// terminal is invisible here (the port probes below are the status readout
+// for that case).
+let startAllChild = null // { proc, pid, startedAt } | null
+
+function startAllRunning() {
+  return !!startAllChild && startAllChild.proc.exitCode === null && !startAllChild.proc.killed
+}
+
+app.get('/api/system/start-all', async (_req, res) => {
+  const [comfyUp, panelUp] = await Promise.all([probePort(COMFYUI_PROBE_PORT), probePort(5173)])
+  const alive = startAllRunning()
+  res.json({
+    script: START_ALL_SCRIPT,
+    running: alive,
+    pid: alive ? startAllChild?.pid : undefined,
+    startedAt: alive ? startAllChild?.startedAt : undefined,
+    comfyUp,
+    panelUp,
+  })
+})
+
+app.post('/api/system/start-all/start', async (req, res) => {
+  try {
+    if (startAllRunning()) throw new HttpError(409, 'start-all.sh zaten bu panelden başlatıldı.')
+    try {
+      await fs.access(START_ALL_SCRIPT, fsSync.constants.X_OK)
+    } catch {
+      throw new HttpError(404, `Script çalıştırılabilir değil ya da bulunamadı: ${START_ALL_SCRIPT}`)
+    }
+    const proc = spawn('bash', [START_ALL_SCRIPT], {
+      cwd: path.dirname(START_ALL_SCRIPT),
+      detached: true, // own process group → stop can kill the whole tree
+      stdio: 'ignore',
+    })
+    proc.unref()
+    const entry = { proc, pid: proc.pid, startedAt: Date.now() }
+    startAllChild = entry
+    proc.on('exit', () => {
+      if (startAllChild === entry) startAllChild = null
+    })
+    res.json({ ok: true, pid: proc.pid })
+  } catch (err) {
+    sendError(res, err, 'start-all.sh başlatılamadı.')
+  }
+})
+
+app.post('/api/system/start-all/stop', (_req, res) => {
+  try {
+    if (!startAllRunning()) throw new HttpError(409, 'Bu panelden başlatılmış çalışan bir start-all.sh yok.')
+    const entry = startAllChild
+    const pid = entry.pid
+    const signal = (sig) => {
+      try {
+        process.kill(-pid, sig) // negative pid → whole process group
+      } catch {
+        try {
+          process.kill(pid, sig)
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+    signal('SIGTERM')
+    setTimeout(() => {
+      if (entry.proc.exitCode === null) signal('SIGKILL')
+    }, 6000).unref()
+    res.json({ ok: true })
+  } catch (err) {
+    sendError(res, err, 'start-all.sh durdurulamadı.')
+  }
+})
+
+app.post('/api/system/shutdown', (_req, res) => {
+  res.json({ ok: true })
+  // A beat so the response reaches the phone before logind tears the session
+  // down. `systemctl poweroff` needs no sudo here: the desktop session is
+  // "active" on seat0 and polkit lets an active local session power off on
+  // its own (verified: CanPowerOff → "yes").
+  setTimeout(() => {
+    spawn('systemctl', ['poweroff'], { detached: true, stdio: 'ignore' }).unref()
+  }, 800)
 })
 
 app.listen(PORT, () => {

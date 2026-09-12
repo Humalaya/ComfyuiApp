@@ -11,17 +11,25 @@ import {
   type HistoryOutputFile,
 } from '../api/comfyClient'
 import { notify } from '../native/notifications'
+import { clearRemoteJob, loadRemoteJob, saveRemoteJob } from '../storage/remoteJobStorage'
 
 // Deliberately much lighter than useComfyGeneration.ts (video): image
 // generations here finish in seconds, not minutes, so the phone is
 // realistically still in the user's hand/foregrounded for the whole thing —
-// none of the video hook's background-survival machinery (WS reconnect,
-// reload recovery via localStorage, the native KeepAlive foreground service,
-// queueing) is pulled in for this first version. Completion is still decided
-// purely by /history polling, same as before — the WebSocket subscription
-// added below is read-only decoration for live step progress/preview, never
-// the source of truth for "done", so a missed or delayed WS message can
-// never leave this hook stuck.
+// none of the video hook's background-survival machinery (WS reconnect, the
+// native KeepAlive foreground service, client-side batching) is pulled in
+// for this. Completion is still decided purely by /history polling, same as
+// before — the WebSocket subscription added below is read-only decoration
+// for live step progress/preview, never the source of truth for "done", so a
+// missed or delayed WS message can never leave this hook stuck.
+//
+// It DOES now recover an in-flight job on mount (see the effect near the
+// bottom) the same way useComfyGeneration.ts always has — a generation this
+// hook started is just as real and just as easy to lose track of on a reload
+// as a video one, it just used to not bother recovering it given how much
+// shorter these usually run. The active-job pointer lives on the small
+// output-server's shared PC-RAM store (remoteJobStorage.ts), not the phone's
+// own storage, so recovery works even from a different device/browser.
 //
 // It subscribes to the same *shared* ComfyUI socket useComfyGeneration uses
 // (see connectComfySocket's module-level manager in comfyClient.ts) rather
@@ -34,7 +42,8 @@ import { notify } from '../native/notifications'
 // this is shared by every Text2Img-shaped screen (the SDXL one and the
 // Krea2/FLUX one so far), which differ in their settings shape and which
 // node actually saves the output, but not in how "submit → poll → done or
-// error" works.
+// error" works. `kind` is just this instance's key in the output-server's
+// /api/state/:kind/job store — 'sdxl' or 'krea2'.
 export type ImageGenStatus = 'idle' | 'running' | 'done' | 'error'
 
 export interface ImageGenerationResult {
@@ -83,7 +92,7 @@ function extractImageFiles(outputs: Record<string, unknown>, outputNodeId: strin
   return nodeOutput.images ?? nodeOutput.gifs ?? nodeOutput.videos ?? []
 }
 
-export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkflow, outputNodeId: string) {
+export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkflow, outputNodeId: string, kind: 'sdxl' | 'krea2') {
   const [state, setState] = useState<ImageGenState>(initialState)
   // Bumped on every terminal transition, same reason as
   // useComfyGeneration.ts's identical field: a caller draining a queue by
@@ -139,6 +148,7 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
       if (activePromptId.current !== promptId) return
       activePromptId.current = null
       stopTimers()
+      clearRemoteJob(kind)
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
       const files = extractImageFiles(entry.outputs, outputNodeId)
       if (files.length > 0) {
@@ -154,7 +164,7 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
         notify('✗ Üretim hatası', error)
       }
     },
-    [stopTimers, settle, outputNodeId],
+    [stopTimers, settle, outputNodeId, kind],
   )
 
   // A node throwing mid-execution never makes ComfyUI set completed: true —
@@ -168,11 +178,12 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
       if (activePromptId.current !== promptId) return
       activePromptId.current = null
       stopTimers()
+      clearRemoteJob(kind)
       const error = extractHistoryErrorMessage(entry)
       settle({ status: 'error', error })
       notify('✗ Üretim hatası', error)
     },
-    [stopTimers, settle],
+    [stopTimers, settle, kind],
   )
 
   const pollOnce = useCallback(
@@ -221,22 +232,83 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
           throw new Error('Workflow doğrulama hatası: ' + JSON.stringify(res.node_errors))
         }
         activePromptId.current = res.prompt_id
+        // So a page reload (screen lock, closing the phone entirely, a
+        // different device) can recover this generation instead of losing
+        // track of it — see the mount-time recovery effect below.
+        saveRemoteJob(kind, res.prompt_id, startTime.current ?? Date.now())
         pollInterval.current = setInterval(() => {
           if (activePromptId.current) pollOnce(activePromptId.current)
         }, POLL_MS)
       } catch (err) {
         stopTimers()
+        // activePromptId.current was never set in this branch — ComfyUI
+        // never got this prompt at all (most likely it's unreachable) — so
+        // there's nothing to clear from the remote job store.
         settle({ status: 'error', error: (err as Error).message })
       }
     },
-    [stopTimers, pollOnce, settle, buildWorkflow],
+    [stopTimers, pollOnce, settle, buildWorkflow, kind],
   )
 
   const reset = useCallback(() => {
     stopTimers()
+    clearRemoteJob(kind)
     activePromptId.current = null
     settle({})
-  }, [stopTimers, settle])
+  }, [stopTimers, settle, kind])
+
+  // Recovers a generation that was still running when the page was torn
+  // down — same rationale as useComfyGeneration.ts's identical recovery
+  // effect (see remoteJobStorage.ts for why this now works across a phone
+  // reboot or a different device, not just a same-device reload). No
+  // separate "recovering" status here: unlike the video tab, this hook never
+  // showed fine-grained per-node progress to begin with, so "running" with
+  // elapsed time already ticking from the real start is exactly what a
+  // recovered job looks like too.
+  useEffect(() => {
+    // Guards a job resolving into an already-cleaned-up effect instance —
+    // see useComfyGeneration.ts's identical guard for the full StrictMode
+    // double-invoke rationale.
+    let cancelled = false
+
+    loadRemoteJob(kind).then((job) => {
+      if (cancelled || !job) return
+
+      activePromptId.current = job.promptId
+      startTime.current = job.startedAt
+
+      setState({
+        ...initialState,
+        status: 'running',
+        elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)),
+      })
+
+      stopTimers()
+      tickInterval.current = setInterval(() => {
+        setState((s) =>
+          s.status === 'running'
+            ? { ...s, elapsedSeconds: startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : s.elapsedSeconds }
+            : s,
+        )
+      }, 1000)
+      pollInterval.current = setInterval(() => {
+        if (activePromptId.current) pollOnce(activePromptId.current)
+      }, POLL_MS)
+
+      // Resolve immediately instead of waiting up to POLL_MS — the job may
+      // well have already finished while the page was gone.
+      pollOnce(job.promptId)
+    })
+
+    return () => {
+      cancelled = true
+      stopTimers()
+    }
+    // Mount-only by design (recovery happens once, right after the hook is
+    // first used) — pollOnce/stopTimers are stable useCallbacks, kind is
+    // fixed per instance (SDXL and Krea2 tabs each mount their own).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return { ...state, settledCount, generate, reset }
 }

@@ -9,7 +9,7 @@ const WS_BASE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.h
 // this (everything goes through the /comfy-api proxy above to dodge CORS),
 // but the native Android KeepAlive service polls ComfyUI directly from Java
 // while the WebView is backgrounded, so it needs the real address.
-export const COMFY_BASE_URL: string = import.meta.env.VITE_COMFYUI_URL || 'http://192.168.1.65:8188'
+export const COMFY_BASE_URL: string = import.meta.env.VITE_COMFYUI_URL || 'http://192.168.1.62:8188'
 
 export interface QueuePromptResponse {
   prompt_id: string

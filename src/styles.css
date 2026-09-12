@@ -81,6 +81,11 @@ body {
   font-size: 0.85rem;
 }
 
+.quality-preset-tabs .tab {
+  padding: 8px;
+  font-size: 0.85rem;
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -291,6 +296,63 @@ input[type='range'] {
   transform: rotate(180deg);
 }
 
+/* Generic collapsible (see CollapsibleSection.tsx) — same visual treatment
+   as the LoRA list's own toggle above, kept as its own set of classes since
+   it's used for unrelated content ("Gelişmiş Ayarlar" sampler/scheduler/
+   denoise controls). */
+.collapsible-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+}
+
+.collapsible-toggle-label {
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.collapsible-toggle-chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+}
+
+.collapsible-toggle-chevron-open {
+  transform: rotate(180deg);
+}
+
+.collapsible-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.picture-frame-row {
+  display: flex;
+  gap: 10px;
+}
+
+.picture-frame-row > .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.picture-frame-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .lora-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -411,6 +473,30 @@ input[type='range'] {
   display: block;
 }
 
+/* Civitai fallback (see LoraList.tsx) — only shown once a lookup actually
+   returned trainedWords for a slot's lora. */
+.lora-trigger-words {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lora-civitai-button {
+  width: 100%;
+  padding: 5px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.lora-civitai-button:disabled {
+  opacity: 0.6;
+}
+
 .lora-weight-row {
   display: flex;
   align-items: center;
@@ -451,6 +537,13 @@ input[type='range'] {
 .status-title {
   font-size: 1rem;
   font-weight: 600;
+}
+
+.status-panel-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .status-stage {
@@ -556,6 +649,15 @@ input[type='range'] {
   gap: 6px;
   overflow-x: auto;
   padding-bottom: 2px;
+  min-width: 0;
+}
+
+/* Used standalone in the running/queued status panel (see ResultCarousel's
+   `compact` prop) — sits next to the "Oluşturuluyor…" title, so it needs to
+   scroll within whatever space is left rather than push the row wider. */
+.result-carousel-strip-compact {
+  flex: 1;
+  padding-bottom: 0;
 }
 
 .result-carousel-thumb {
@@ -568,6 +670,12 @@ input[type='range'] {
   padding: 0;
   overflow: hidden;
   opacity: 0.6;
+}
+
+.result-carousel-thumb-compact {
+  width: 34px;
+  border-radius: 6px;
+  opacity: 1;
 }
 
 .result-carousel-thumb-active {
@@ -656,18 +764,6 @@ input[type='range'] {
   display: flex;
   gap: 6px;
   margin: 0 8px 8px;
-}
-
-.gallery-download {
-  flex: 1;
-  display: block;
-  text-align: center;
-  padding: 8px;
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text);
-  text-decoration: none;
-  font-size: 0.78rem;
 }
 
 .gallery-metadata-button {
@@ -804,6 +900,23 @@ input[type='range'] {
   z-index: 1001;
 }
 
+/* Always visible (not gated behind long-press, unlike Kaydet/Paylaş) — this
+   is the metadata action's main home now, not just the grid tile's small
+   button (see FullscreenViewer.tsx's onMetadata prop). */
+.popup-metadata-button {
+  position: absolute;
+  top: max(-16px, env(safe-area-inset-top));
+  left: max(-16px, env(safe-area-inset-left));
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  z-index: 1001;
+}
+
 .popup-nav {
   position: absolute;
   top: 50%;
@@ -828,6 +941,25 @@ input[type='range'] {
 
 .popup-nav-next {
   right: 8px;
+}
+
+/* Galeri's long-press "Kaydet/Paylaş" menu (see FullscreenViewer.tsx) — a
+   second overlay stacked on top of the fullscreen viewer's own, so it needs
+   a higher z-index to actually sit above the media/nav buttons underneath. */
+.media-action-overlay {
+  z-index: 1200;
+}
+
+.media-action-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
 }
 
 /* Metadata modal */
@@ -991,4 +1123,212 @@ input[type='range'] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* --- Ayarlar (Settings) tab ------------------------------------------- */
+
+/* Four tabs instead of three — tighten the top nav so the labels still fit
+   on a narrow phone without wrapping. */
+.app-header .tabs .tab {
+  padding: 11px 6px;
+  font-size: 0.9rem;
+}
+
+.settings-tab {
+  gap: 24px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.settings-section-danger .settings-section-title {
+  color: var(--danger);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.settings-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-row-name {
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-row-sub {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.settings-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.settings-dot-on {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-actions .secondary-button {
+  flex: 1;
+}
+
+.danger-button {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* --- Üret çekmecesi + üst menü --- */
+
+/* Long-press on "Üret" is an intentional gesture — stop the browser waiting
+   on it for double-tap-zoom / text selection, which delays or eats it. */
+.app-header .tabs .tab {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Gear (Ayarlar) — narrow, doesn't take an equal third of the bar. */
+.app-header .tabs .tab-icon {
+  flex: 0 0 auto;
+  min-width: 46px;
+  font-size: 1.1rem;
+  padding: 11px 10px;
+}
+
+.tab-caret {
+  opacity: 0.55;
+  font-size: 0.8em;
+}
+
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  z-index: 50;
+}
+
+.drawer-overlay-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(78vw, 300px);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+  overflow-y: auto;
+}
+
+.drawer-overlay-open .drawer-panel {
+  transform: translateX(0);
+}
+
+.drawer-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 4px 10px 8px;
+}
+
+.drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 12px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 1rem;
+  text-align: left;
+}
+
+.drawer-item-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.drawer-item-icon {
+  font-size: 1.2rem;
+}
+
+/* --- OpenWebUI gömülü iframe --- */
+
+.owui-wrap {
+  position: relative;
+  /* Cancel .app's 16px side padding and 48px bottom padding so the embed
+     goes edge-to-edge. */
+  margin: 0 -16px -48px;
+  height: calc(100vh - var(--header-height) - 12px);
+  height: calc(100dvh - var(--header-height) - 12px);
+}
+
+.owui-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: var(--bg);
+}
+
+.owui-external {
+  position: absolute;
+  right: 10px;
+  bottom: 58px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  font-size: 0.75rem;
+  text-decoration: none;
 }

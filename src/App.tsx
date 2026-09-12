@@ -1,18 +1,40 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ImageUploader } from './components/ImageUploader'
 import { NumberField } from './components/NumberField'
+import { CollapsibleSection } from './components/CollapsibleSection'
 import { ImportPngButton } from './components/ImportPngButton'
 import { LoraList } from './components/LoraList'
 import { StatusPanel } from './components/StatusPanel'
 import { GenerationFullscreenViewer } from './components/GenerationFullscreenViewer'
-import { Gallery } from './components/Gallery'
+import { Gallery, type ImportPayload } from './components/Gallery'
 import { ImageGenerateTab } from './components/ImageGenerateTab'
 import { Krea2GenerateTab } from './components/Krea2GenerateTab'
+import { SettingsTab } from './components/SettingsTab'
+import { UretDrawer, type UretView } from './components/UretDrawer'
+import { OpenWebUiFrame } from './components/OpenWebUiFrame'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
 import { getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
-import { loadSettings, saveSettings } from './storage/settingsStorage'
-import { loadQueue, saveQueue } from './storage/queueStorage'
+import type { ImageGenerationSettings } from './workflow/imageFieldMap'
+import type { Krea2GenerationSettings } from './workflow/krea2FieldMap'
+import { loadSettings, normalizeSettings, saveSettings } from './storage/settingsStorage'
+import { loadRemoteQueue, saveRemoteQueue } from './storage/remoteQueueStorage'
+
+// This kind's key in the output-server's shared /api/state/:kind/* store —
+// see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
+const QUEUE_KIND = 'video'
+
+// A settings payload pushed at ImageGenerateTab/Krea2GenerateTab from
+// outside (Galeri's "send to create") — those two tabs own their settings
+// state entirely locally (unlike the video tab, which App.tsx already holds
+// directly), so this is how App.tsx hands them something to merge in. `id`
+// is a nonce: without it, sending the exact same settings object twice in a
+// row (same PNG, same "Ayarları Gönder" tap) wouldn't register as a change
+// and the second send would silently do nothing.
+export interface PendingImport<T> {
+  settings: Partial<T>
+  id: number
+}
 
 // Kept small on purpose — not a real history feature, just enough of a
 // "what finished recently" trail for GenerationFullscreenViewer to swipe
@@ -35,15 +57,60 @@ interface CompletedItem {
 // 'image' first/default per "image generation ana ekran olacak" — video
 // generation (txt2vid/img2vid, see ImageUploader.tsx) and the gallery are
 // both still one tap away.
-type Tab = 'image' | 'video' | 'gallery'
+//
+// Top nav is three entries: [ Üret ] [ Galeri ] [ ⚙ ]. "Üret" is not a plain
+// tab — a normal tap goes to whichever of its sub-views you last had open, a
+// long-press slides open a drawer to switch between them (see UretDrawer).
+// Galeri and Ayarlar (the gear) are ordinary tabs.
+type Tab = 'uret' | 'gallery' | 'settings'
+// UretView ('image' | 'video' | 'openwebui') — the sub-views behind "Üret";
+// defined with the drawer that switches between them. 'openwebui' is the
+// OpenWebUI instance on this same PC (:3000), embedded as an iframe.
+
+const URET_VIEW_LABEL: Record<UretView, string> = {
+  image: 'Görsel',
+  video: 'Video',
+  openwebui: 'OpenWebUI',
+}
+
+// Which "Üret" sub-view to restore on next launch — a plain reload (screen
+// lock, OEM kill, manual refresh) shouldn't always dump you back on Görsel.
+const URET_VIEW_KEY = 'mobile-control:uret-view'
+function loadUretView(): UretView {
+  try {
+    const v = localStorage.getItem(URET_VIEW_KEY)
+    if (v === 'image' || v === 'video' || v === 'openwebui') return v
+  } catch {
+    /* private mode / unavailable — fall through to the default */
+  }
+  return 'image'
+}
+function saveUretView(v: UretView): void {
+  try {
+    localStorage.setItem(URET_VIEW_KEY, v)
+  } catch {
+    /* best effort */
+  }
+}
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000_000)
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('image')
+  const [tab, setTab] = useState<Tab>('uret')
+  const [uretView, setUretView] = useState<UretView>(loadUretView)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  // OpenWebUI's iframe is only mounted once you've actually opened it once,
+  // then kept mounted (hidden) so switching away and back doesn't reload the
+  // whole chat UI / drop its session. No reason to load a second web app on
+  // startup for someone who never touches that view.
+  const [openWebUiVisited, setOpenWebUiVisited] = useState(() => loadUretView() === 'openwebui')
   const [imageModel, setImageModel] = useState<'sdxl' | 'krea2'>('sdxl')
+  // See PendingImport above — null means "nothing pending", each tab only
+  // reacts when `id` actually changes.
+  const [imageImportRequest, setImageImportRequest] = useState<PendingImport<ImageGenerationSettings> | null>(null)
+  const [krea2ImportRequest, setKrea2ImportRequest] = useState<PendingImport<Krea2GenerationSettings> | null>(null)
   // Restores whatever was last saved (prompt, seed, model, LoRAs, input
   // image reference, ...) so a reload — screen lock, OEM background kill,
   // manual refresh — doesn't wipe the form back to scratch. Only a true
@@ -52,13 +119,21 @@ export default function App() {
   // something is saved, the seed is whatever the user left it at, same as
   // every other field.
   const [settings, setSettings] = useState<GenerationSettings>(() => loadSettings() ?? { ...getDefaultSettings(), seed: randomSeed() })
-  // Restored from storage on mount for the exact reason jobStorage.ts exists
+  // Restored from the output-server's PC-RAM store on mount (see
+  // remoteQueueStorage.ts) for the exact reason remoteJobStorage.ts exists
   // for the *active* job: a page reload mid-batch (screen lock, OEM
-  // background kill, manual refresh) used to wipe this array outright, since
-  // it only ever lived in memory — which is exactly what silently ate an
-  // overnight queue of ~15 videos down to just the first one or two. See
-  // queueStorage.ts.
-  const [queue, setQueue] = useState<GenerationSettings[]>(() => loadQueue())
+  // background kill, manual refresh, or just closing the phone entirely) used
+  // to wipe this array outright, since it only ever lived in the phone's own
+  // storage — which is exactly what silently ate an overnight queue of ~15
+  // videos down to just the first one or two. Starts empty and is populated
+  // by the mount effect below rather than a lazy useState initializer, since
+  // loading it is now an async fetch instead of a synchronous localStorage read.
+  const [queue, setQueue] = useState<GenerationSettings[]>([])
+  // Guards the save-on-change effect below from firing with this empty
+  // initial `queue` before the load above has actually resolved — without
+  // it, every fresh mount would immediately PUT `[]` to the server and wipe
+  // out a real queue that was sitting there the whole time.
+  const [queueLoaded, setQueueLoaded] = useState(false)
   // Recently-finished results, most recent first — kept here (separate from
   // the single active `gen.result`) specifically so that when the queue
   // drain effect below immediately moves on to the next job, the just-shown
@@ -112,8 +187,65 @@ export default function App() {
   }, [settings])
 
   useEffect(() => {
-    saveQueue(queue)
-  }, [queue])
+    saveUretView(uretView)
+  }, [uretView])
+
+  // Switch which "Üret" sub-view is showing and make sure we're on the Üret
+  // tab — shared by the drawer, the nav button, and Gallery's "send to
+  // create" hand-off below.
+  function goToUret(view: UretView) {
+    setUretView(view)
+    if (view === 'openwebui') setOpenWebUiVisited(true)
+    setTab('uret')
+    setDrawerOpen(false)
+  }
+
+  // Long-press on the "Üret" nav button opens the drawer; a normal tap just
+  // returns to the current sub-view. Pointer events (not touch+mouse both) so
+  // the handlers fire once, not twice, on a phone. The ref-tracked flag
+  // swallows the click that fires when the finger lifts after a long-press,
+  // so the drawer opening isn't immediately followed by a tab switch under it.
+  const uretPressTimer = useRef<number | null>(null)
+  const uretLongFired = useRef(false)
+
+  function beginUretPress() {
+    uretLongFired.current = false
+    if (uretPressTimer.current) window.clearTimeout(uretPressTimer.current)
+    uretPressTimer.current = window.setTimeout(() => {
+      uretLongFired.current = true
+      setDrawerOpen(true)
+    }, 450)
+  }
+  function endUretPress() {
+    if (uretPressTimer.current) {
+      window.clearTimeout(uretPressTimer.current)
+      uretPressTimer.current = null
+    }
+  }
+  function onUretClick() {
+    if (uretLongFired.current) {
+      uretLongFired.current = false
+      return
+    }
+    setTab('uret')
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    loadRemoteQueue(QUEUE_KIND, normalizeSettings).then((loaded) => {
+      if (cancelled) return
+      setQueue(loaded)
+      setQueueLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!queueLoaded) return
+    saveRemoteQueue(QUEUE_KIND, queue)
+  }, [queue, queueLoaded])
 
   function startNextInQueue() {
     if (queue.length === 0) return
@@ -196,6 +328,26 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queuePaused, queue, gen.status])
 
+  // A persisted unetName can go stale in a way that still *looks* fine in
+  // the dropdown — e.g. this app's own model-folder reorganization earlier
+  // changed every video model's required subfolder prefix, so a value saved
+  // before that (e.g. "minimaxH3INT8INT4_fl2vaINT8Pruned.safetensors" with
+  // no "Video/" prefix) keeps rendering as a normal-looking selected option
+  // (loadSettings() restores it verbatim, and the <select> below falls back
+  // to a synthetic <option> for it when it's not in the live list) right up
+  // until it's actually submitted, where ComfyUI rejects it outright:
+  // "Model in folder 'diffusion_models' with filename '...' not found." Same
+  // fix as ImageGenerateTab.tsx's identical checkpoint effect — snap back to
+  // whatever ComfyUI actually reports the moment that list loads, instead of
+  // only ever finding out a saved model went stale when a generation fails.
+  useEffect(() => {
+    if (objectInfo.unetNames.length === 0) return
+    if (!objectInfo.unetNames.includes(settings.unetName)) {
+      update('unetName', objectInfo.unetNames[0])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectInfo.unetNames])
+
   function update<K extends keyof GenerationSettings>(key: K, value: GenerationSettings[K]) {
     setSettings((s) => ({ ...s, [key]: value }))
   }
@@ -244,19 +396,41 @@ export default function App() {
     setQueue((q) => q.filter((_, i) => i !== index))
   }
 
+  // Shared by StatusPanel's thumbnail strips (both the compact one shown
+  // while queued/running and the full one in the "done" card) and
+  // GenerationFullscreenViewer — computed once here instead of separately
+  // at each call site.
+  const historyUrls = completedResults.map((r) => r.url)
+
   return (
     <div className="app" style={{ '--header-height': `${headerHeight}px` } as CSSProperties}>
       <header className="app-header" ref={headerRef}>
         <h1>MiniMax H3 Mobil Kontrol</h1>
         <nav className="tabs">
-          <button className={tab === 'image' ? 'tab tab-active' : 'tab'} onClick={() => setTab('image')}>
-            Görsel
-          </button>
-          <button className={tab === 'video' ? 'tab tab-active' : 'tab'} onClick={() => setTab('video')}>
-            Video
+          <button
+            className={tab === 'uret' ? 'tab tab-active' : 'tab'}
+            onClick={onUretClick}
+            onPointerDown={beginUretPress}
+            onPointerUp={endUretPress}
+            onPointerLeave={endUretPress}
+            onPointerCancel={endUretPress}
+            onContextMenu={(e) => e.preventDefault()}
+            aria-haspopup="menu"
+            title="Uzun bas: Görsel / Video / OpenWebUI"
+          >
+            {URET_VIEW_LABEL[uretView]}
+            <span className="tab-caret" aria-hidden="true"> ▾</span>
           </button>
           <button className={tab === 'gallery' ? 'tab tab-active' : 'tab'} onClick={() => setTab('gallery')}>
             Galeri
+          </button>
+          <button
+            className={tab === 'settings' ? 'tab tab-active tab-icon' : 'tab tab-icon'}
+            onClick={() => setTab('settings')}
+            aria-label="Ayarlar"
+            title="Ayarlar"
+          >
+            ⚙
           </button>
         </nav>
       </header>
@@ -267,7 +441,7 @@ export default function App() {
           you switched away and back, since unmounting it threw all of that
           state away; the same would happen to in-progress generations on
           either generate tab. */}
-      <div style={{ display: tab === 'image' ? 'block' : 'none' }}>
+      <div style={{ display: tab === 'uret' && uretView === 'image' ? 'block' : 'none' }}>
         <div className="tabs image-model-tabs">
           <button className={imageModel === 'sdxl' ? 'tab tab-active' : 'tab'} onClick={() => setImageModel('sdxl')}>
             SDXL
@@ -279,26 +453,40 @@ export default function App() {
         {/* Both stay mounted for the same reason as the outer tabs — switching
             between model families shouldn't lose an in-progress generation. */}
         <div style={{ display: imageModel === 'sdxl' ? 'block' : 'none' }}>
-          <ImageGenerateTab />
+          <ImageGenerateTab importRequest={imageImportRequest} />
         </div>
         <div style={{ display: imageModel === 'krea2' ? 'block' : 'none' }}>
-          <Krea2GenerateTab />
+          <Krea2GenerateTab importRequest={krea2ImportRequest} />
         </div>
+      </div>
+
+      <div style={{ display: tab === 'settings' ? 'block' : 'none' }}>
+        <SettingsTab active={tab === 'settings'} />
       </div>
 
       <div style={{ display: tab === 'gallery' ? 'block' : 'none' }}>
         <Gallery
-          onSendToCreate={(imported) => {
-            // fixedSeed is already set to true inside pngImport.ts whenever a
-            // seed was actually recognized, so this merge doesn't need to
-            // special-case it.
-            setSettings((s) => ({ ...s, ...imported }))
-            setTab('video')
+          onSendToCreate={(payload: ImportPayload) => {
+            if (payload.kind === 'video') {
+              // fixedSeed is already set to true inside pngImport.ts whenever
+              // a seed was actually recognized, so this merge doesn't need to
+              // special-case it.
+              setSettings((s) => ({ ...s, ...payload.settings }))
+              goToUret('video')
+            } else if (payload.kind === 'sdxl') {
+              setImageImportRequest({ settings: payload.settings, id: Date.now() })
+              setImageModel('sdxl')
+              goToUret('image')
+            } else {
+              setKrea2ImportRequest({ settings: payload.settings, id: Date.now() })
+              setImageModel('krea2')
+              goToUret('image')
+            }
           }}
         />
       </div>
 
-      <main className="form" style={{ display: tab === 'video' ? 'flex' : 'none' }}>
+      <main className="form" style={{ display: tab === 'uret' && uretView === 'video' ? 'flex' : 'none' }}>
         {/* Output first, form fields below — so the current job's progress
             or result is visible the moment this tab opens, without scrolling
             past the whole form to find out whether anything even finished. */}
@@ -342,12 +530,30 @@ export default function App() {
           recovering={gen.recovering}
           wsStatus={gen.wsStatus}
           onCancel={() => gen.cancel()}
-          onOpenViewer={(i) => setViewerUrl(gen.result?.urls[i] ?? null)}
+          onOpenViewer={setViewerUrl}
+          historyUrls={historyUrls}
         />
 
         <ImportPngButton onImport={(imported) => setSettings((s) => ({ ...s, ...imported }))} />
 
-        <ImageUploader value={settings.inputImage} onChange={(img) => update('inputImage', img)} />
+        <div className="picture-frame-row">
+          <ImageUploader
+            label="Picture 1 (Başlangıç Karesi)"
+            hint="Kapalı — düz metinden video üretilir (txt2vid)."
+            enabled={settings.inputImageEnabled}
+            onToggleEnabled={(enabled) => update('inputImageEnabled', enabled)}
+            value={settings.inputImage}
+            onChange={(img) => update('inputImage', img)}
+          />
+          <ImageUploader
+            label="Picture 2 (Bitiş Karesi)"
+            hint="Kapalı — video Picture 1'den (ya da düz metinden) normal şekilde üretilir."
+            enabled={settings.lastFrameEnabled}
+            onToggleEnabled={(enabled) => update('lastFrameEnabled', enabled)}
+            value={settings.lastFrameImage}
+            onChange={(img) => update('lastFrameImage', img)}
+          />
+        </div>
 
         <div className="field">
           <label className="field-label">Prompt</label>
@@ -442,6 +648,35 @@ export default function App() {
           )}
         </div>
 
+        <CollapsibleSection title="Gelişmiş Ayarlar">
+          <div className="field">
+            <label className="field-label">Sampler</label>
+            <select value={settings.samplerName} onChange={(e) => update('samplerName', e.target.value)} disabled={objectInfo.loading}>
+              {!objectInfo.samplerNames.includes(settings.samplerName) && <option value={settings.samplerName}>{settings.samplerName}</option>}
+              {objectInfo.samplerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label">Scheduler</label>
+            <select value={settings.scheduler} onChange={(e) => update('scheduler', e.target.value)} disabled={objectInfo.loading}>
+              {!objectInfo.schedulerNames.includes(settings.scheduler) && <option value={settings.scheduler}>{settings.scheduler}</option>}
+              {objectInfo.schedulerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label">Denoise</label>
+            <NumberField min={0} max={1} step={0.01} value={settings.denoise} onChange={(v) => update('denoise', v)} />
+          </div>
+        </CollapsibleSection>
+
         {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
         <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
@@ -449,11 +684,22 @@ export default function App() {
         </button>
       </main>
 
+      <div style={{ display: tab === 'uret' && uretView === 'openwebui' ? 'block' : 'none' }}>
+        {openWebUiVisited && <OpenWebUiFrame />}
+      </div>
+
+      <UretDrawer
+        open={drawerOpen}
+        current={uretView}
+        onSelect={goToUret}
+        onClose={() => setDrawerOpen(false)}
+      />
+
       {viewerUrl !== null && (
         <GenerationFullscreenViewer
-          items={completedResults.map((r) => ({ url: r.url, kind: 'video' as const }))}
-          index={completedResults.findIndex((r) => r.url === viewerUrl)}
-          onIndexChange={(i) => setViewerUrl(completedResults[i]?.url ?? null)}
+          items={historyUrls.map((url) => ({ url, kind: 'video' as const }))}
+          index={historyUrls.indexOf(viewerUrl)}
+          onIndexChange={(i) => setViewerUrl(historyUrls[i] ?? null)}
           onClose={() => setViewerUrl(null)}
         />
       )}

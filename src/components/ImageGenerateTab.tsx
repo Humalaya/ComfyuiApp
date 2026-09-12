@@ -4,16 +4,21 @@ import { LoraList } from './LoraList'
 import { GenerationPreview } from './GenerationPreview'
 import { ResultCarousel } from './ResultCarousel'
 import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
+import { CollapsibleSection } from './CollapsibleSection'
 import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useImageGeneration } from '../hooks/useImageGeneration'
-import { buildImageWorkflow, getDefaultImageSettings, IMAGE_OUTPUT_NODE_ID, type ImageGenerationSettings } from '../workflow/imageFieldMap'
+import { buildImageWorkflow, getDefaultImageSettings, IMAGE_OUTPUT_NODE_ID, QUALITY_PRESETS, type ImageGenerationSettings } from '../workflow/imageFieldMap'
 import type { LoraSlot } from '../workflow/fieldMap'
-import { loadImageSettings, saveImageSettings } from '../storage/imageSettingsStorage'
-import { loadImageQueue, saveImageQueue } from '../storage/imageQueueStorage'
+import { loadImageSettings, normalizeImageSettings, saveImageSettings } from '../storage/imageSettingsStorage'
+import { loadRemoteQueue, saveRemoteQueue } from '../storage/remoteQueueStorage'
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000_000)
 }
+
+// This kind's key in the output-server's shared /api/state/:kind/* store —
+// see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
+const KIND = 'sdxl'
 
 // Kept small — a "what finished recently" log, not a real history feature.
 // Same rationale as App.tsx's identical constant for the video tab.
@@ -29,21 +34,35 @@ interface CompletedItem {
   createdAt: number
 }
 
+interface Props {
+  // Pushed from App.tsx when Galeri's "Ayarları Gönder" targets this tab
+  // (see App.tsx's PendingImport) — this tab owns `settings` entirely
+  // locally, so this is the only way anything outside it can change what's
+  // in the form. `id` is a nonce: the effect below only reacts when it
+  // actually changes, so sending the exact same PNG's settings twice in a
+  // row still registers as a fresh request instead of silently no-op'ing.
+  importRequest?: { settings: Partial<ImageGenerationSettings>; id: number } | null
+}
+
 // Text2Img — see imageFieldMap.ts for what this workflow does and doesn't
 // expose yet (the FaceDetailer's ~29 parameters are a future "Detail
 // Enhancers" tab). This screen controls prompt, negative prompt, size,
 // steps/cfg/batch count, seed, checkpoint, and LoRAs — no VAE/CLIP override
 // (removed: this checkpoint's own bundled VAE/CLIP is what's actually used
 // and there was never a compatible standalone VAE file to switch to anyway).
-export function ImageGenerateTab() {
+export function ImageGenerateTab({ importRequest }: Props) {
   const [settings, setSettings] = useState<ImageGenerationSettings>(
     () => loadImageSettings() ?? { ...getDefaultImageSettings(), seed: randomSeed() },
   )
-  // Same queueing pattern as the video tab (App.tsx) — persisted so a page
-  // reload doesn't drop everything still waiting in line, and a small
-  // "recently finished" log so drainng the queue doesn't make the previous
-  // result disappear the instant the next one starts.
-  const [queue, setQueue] = useState<ImageGenerationSettings[]>(() => loadImageQueue())
+  // Same queueing pattern as the video tab (App.tsx), now backed by the
+  // output-server's PC-RAM store (see remoteQueueStorage.ts) instead of the
+  // phone's own storage — persisted so closing the phone (not just reloading
+  // it) doesn't drop everything still waiting in line, plus a small
+  // "recently finished" log so draining the queue doesn't make the previous
+  // result disappear the instant the next one starts. Starts empty and is
+  // populated by the mount effect below (loading it is now an async fetch).
+  const [queue, setQueue] = useState<ImageGenerationSettings[]>([])
+  const [queueLoaded, setQueueLoaded] = useState(false)
   const [completedResults, setCompletedResults] = useState<CompletedItem[]>([])
   // The url of the item GenerationFullscreenViewer has open — null means
   // closed. Tracked by url, not a plain index into completedResults: a new
@@ -53,7 +72,7 @@ export function ImageGenerateTab() {
   // newer item the moment that happened.
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const objectInfo = useObjectInfo()
-  const gen = useImageGeneration(buildImageWorkflow, IMAGE_OUTPUT_NODE_ID)
+  const gen = useImageGeneration(buildImageWorkflow, IMAGE_OUTPUT_NODE_ID, KIND)
 
   useEffect(() => {
     const timer = setTimeout(() => saveImageSettings(settings), 400)
@@ -61,8 +80,21 @@ export function ImageGenerateTab() {
   }, [settings])
 
   useEffect(() => {
-    saveImageQueue(queue)
-  }, [queue])
+    let cancelled = false
+    loadRemoteQueue(KIND, normalizeImageSettings).then((loaded) => {
+      if (cancelled) return
+      setQueue(loaded)
+      setQueueLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!queueLoaded) return
+    saveRemoteQueue(KIND, queue)
+  }, [queue, queueLoaded])
 
   // Drains one queued job at a time, same design as App.tsx's video queue
   // (see the long comment there for the full rationale) — including the
@@ -102,6 +134,15 @@ export function ImageGenerateTab() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectInfo.checkpointNames])
+
+  // See the importRequest prop's own comment — reacts only to `id` changing,
+  // not to `settings` (a fresh object every send anyway), so this can't
+  // re-fire on every unrelated re-render.
+  useEffect(() => {
+    if (!importRequest) return
+    setSettings((s) => ({ ...s, ...importRequest.settings }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importRequest?.id])
 
   function update<K extends keyof ImageGenerationSettings>(key: K, value: ImageGenerationSettings[K]) {
     setSettings((s) => ({ ...s, [key]: value }))
@@ -143,6 +184,10 @@ export function ImageGenerateTab() {
     setQueue((q) => q.filter((_, i) => i !== index))
   }
 
+  // Shared by the compact strip (running), the full strip (done), and
+  // GenerationFullscreenViewer.
+  const historyUrls = completedResults.map((r) => r.url)
+
   return (
     <div className="form">
       {/* Output first, form fields below — so the current job's progress or
@@ -166,7 +211,10 @@ export function ImageGenerateTab() {
 
       {gen.status === 'running' && (
         <div className="status-panel">
-          <div className="status-title">Oluşturuluyor…</div>
+          <div className="status-panel-header-row">
+            <div className="status-title">Oluşturuluyor…</div>
+            <ResultCarousel urls={historyUrls} kind="image" onOpen={setViewerUrl} compact />
+          </div>
           <GenerationPreview previewUrl={gen.previewUrl} progress={gen.samplingProgress} />
           <div className="status-row">
             <span>Geçen süre</span>
@@ -186,12 +234,7 @@ export function ImageGenerateTab() {
         <div className="status-panel status-panel-done">
           <div className="status-title">✓ Üretim Tamamlandı</div>
           {gen.totalElapsedSeconds !== null && <div className="status-row">Toplam süre: {gen.totalElapsedSeconds} sn</div>}
-          <ResultCarousel
-            key={gen.result.promptId}
-            urls={gen.result.urls}
-            kind="image"
-            onOpen={(i) => setViewerUrl(gen.result?.urls[i] ?? null)}
-          />
+          <ResultCarousel key={gen.result.promptId} urls={historyUrls} kind="image" onOpen={setViewerUrl} />
         </div>
       )}
 
@@ -219,6 +262,27 @@ export function ImageGenerateTab() {
         {settings.cfg === 0 && (
           <span className="field-hint">CFG 0 iken negatif prompt'un hiçbir etkisi olmuyor (classifier-free guidance devre dışı), bu yüzden kapatıldı.</span>
         )}
+      </div>
+
+      <div className="field">
+        <label className="field-label">Quality Prompt</label>
+        <div className="tabs quality-preset-tabs">
+          {(Object.keys(QUALITY_PRESETS) as (keyof typeof QUALITY_PRESETS)[]).map((id) => (
+            <button
+              key={id}
+              type="button"
+              className={settings.qualityPreset === id ? 'tab tab-active' : 'tab'}
+              onClick={() => update('qualityPreset', settings.qualityPreset === id ? 'none' : id)}
+            >
+              {QUALITY_PRESETS[id].label}
+            </button>
+          ))}
+        </div>
+        <span className="field-hint">
+          {settings.qualityPreset === 'none'
+            ? 'Checkpoint ailesine uygun sabit kalite etiketleri ekler — Prompt/Negatif Prompt kutularında görünmez, sadece üretime gönderilirken eklenir.'
+            : `${QUALITY_PRESETS[settings.qualityPreset].label} kalite etiketleri gönderilirken eklenecek (kutularda görünmez): "${QUALITY_PRESETS[settings.qualityPreset].positive}" / "${QUALITY_PRESETS[settings.qualityPreset].negative}"`}
+        </span>
       </div>
 
       <div className="field-row">
@@ -279,21 +343,50 @@ export function ImageGenerateTab() {
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Batch Size (tek işte üretilecek görsel sayısı)</label>
+          <label className="field-label">Batch Size</label>
           <NumberField min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Batch Count (arka arkaya üretilecek iş sayısı)</label>
+          <label className="field-label">Batch Count</label>
           <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
         </div>
       </div>
-      {(settings.batchSize > 1 || settings.batchCount > 1) && (
-        <span className="field-hint">
-          {settings.batchCount > 1
-            ? `${settings.batchCount} ayrı iş art arda kuyruğa eklenecek, her biri ${settings.batchSize} görsel üretecek (toplam ${settings.batchSize * settings.batchCount} görsel).`
-            : `${settings.batchSize} görsel tek seferde üretilecek — sonuç kartında hepsi gösterilir, hepsi Galeri'de de görünür.`}
-        </span>
-      )}
+      <span className="field-hint">
+        {settings.batchCount > 1
+          ? `${settings.batchCount} ayrı iş art arda kuyruğa eklenecek, her biri ${settings.batchSize} görsel üretecek (toplam ${settings.batchSize * settings.batchCount} görsel).`
+          : settings.batchSize > 1
+            ? `${settings.batchSize} görsel tek seferde üretilecek — sonuç kartında hepsi gösterilir, hepsi Galeri'de de görünür.`
+            : 'Batch Size: tek işte kaç görsel üretilecek. Batch Count: kaç ayrı iş art arda kuyruğa eklenecek.'}
+      </span>
+
+      <CollapsibleSection title="Gelişmiş Ayarlar">
+        <div className="field">
+          <label className="field-label">Sampler</label>
+          <select value={settings.samplerName} onChange={(e) => update('samplerName', e.target.value)} disabled={objectInfo.loading}>
+            {!objectInfo.samplerNames.includes(settings.samplerName) && <option value={settings.samplerName}>{settings.samplerName}</option>}
+            {objectInfo.samplerNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label">Scheduler</label>
+          <select value={settings.scheduler} onChange={(e) => update('scheduler', e.target.value)} disabled={objectInfo.loading}>
+            {!objectInfo.schedulerNames.includes(settings.scheduler) && <option value={settings.scheduler}>{settings.scheduler}</option>}
+            {objectInfo.schedulerNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label">Denoise</label>
+          <NumberField min={0} max={1} step={0.01} value={settings.denoise} onChange={(v) => update('denoise', v)} />
+        </div>
+      </CollapsibleSection>
 
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
@@ -303,9 +396,9 @@ export function ImageGenerateTab() {
 
       {viewerUrl !== null && (
         <GenerationFullscreenViewer
-          items={completedResults.map((r) => ({ url: r.url, kind: 'image' as const }))}
-          index={completedResults.findIndex((r) => r.url === viewerUrl)}
-          onIndexChange={(i) => setViewerUrl(completedResults[i]?.url ?? null)}
+          items={historyUrls.map((url) => ({ url, kind: 'image' as const }))}
+          index={historyUrls.indexOf(viewerUrl)}
+          onIndexChange={(i) => setViewerUrl(historyUrls[i] ?? null)}
           onClose={() => setViewerUrl(null)}
         />
       )}

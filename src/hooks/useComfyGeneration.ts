@@ -16,7 +16,11 @@ import {
 import { buildWorkflow, VIDEO_OUTPUT_NODE_ID, type GenerationSettings } from '../workflow/fieldMap'
 import { startKeepAlive, stopKeepAlive } from '../native/keepAlive'
 import { notify } from '../native/notifications'
-import { clearActiveJob, loadActiveJob, saveActiveJob } from '../storage/jobStorage'
+import { clearRemoteJob, loadRemoteJob, saveRemoteJob } from '../storage/remoteJobStorage'
+
+// This kind's key in the output-server's shared /api/state/:kind/* store —
+// see remoteJobStorage.ts for why that's PC RAM now, not phone localStorage.
+const KIND = 'video'
 
 export type GenerationStatus = 'idle' | 'queued' | 'running' | 'done' | 'error'
 
@@ -64,8 +68,8 @@ interface GenerationState {
   connectionLost: boolean
   // True right after a job was resumed from storage on page load — we know
   // *that* a generation is running (recovered from a persisted prompt_id,
-  // see jobStorage.ts) but not the fine-grained per-node progress, since
-  // that only ever lived in memory and didn't survive the reload. Showing a
+  // see remoteJobStorage.ts) but not the fine-grained per-node progress,
+  // since that only ever lived in memory and didn't survive the reload. Showing a
   // fake 0% bar here would be misleading, so the UI shows a neutral
   // "reconnecting" message instead until either a live WS update arrives or
   // the /history poll finds it already finished.
@@ -181,7 +185,7 @@ export function useComfyGeneration() {
       activePromptId.current = null
       stopTicking()
       stopKeepAlive()
-      clearActiveJob()
+      clearRemoteJob(KIND)
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
       const files = extractVideoFiles(entry.outputs)
       if (files.length > 0) {
@@ -215,7 +219,7 @@ export function useComfyGeneration() {
       activePromptId.current = null
       stopTicking()
       stopKeepAlive()
-      clearActiveJob()
+      clearRemoteJob(KIND)
       const error = extractHistoryErrorMessage(entry)
       settle({ status: 'error', error })
       notify('✗ Üretim hatası', error)
@@ -293,7 +297,7 @@ export function useComfyGeneration() {
                   activePromptId.current = null
                   stopTicking()
                   stopKeepAlive()
-                  clearActiveJob()
+                  clearRemoteJob(KIND)
                   settle({ status: 'error', error })
                   notify('✗ Üretim hatası', error)
                 }
@@ -303,7 +307,7 @@ export function useComfyGeneration() {
                 activePromptId.current = null
                 stopTicking()
                 stopKeepAlive()
-                clearActiveJob()
+                clearRemoteJob(KIND)
                 settle({ status: 'error', error })
                 notify('✗ Üretim hatası', error)
               })
@@ -333,7 +337,7 @@ export function useComfyGeneration() {
           activePromptId.current = null
           stopTicking()
           stopKeepAlive()
-          clearActiveJob()
+          clearRemoteJob(KIND)
           settle({ status: 'error', error })
           notify('✗ Üretim hatası', error)
         }
@@ -383,7 +387,7 @@ export function useComfyGeneration() {
         // So a page reload (screen lock, OEM background kill, manual
         // refresh) can recover this generation instead of losing track of it
         // entirely — see the mount-time recovery effect below.
-        saveActiveJob(res.prompt_id, startTime.current ?? Date.now())
+        saveRemoteJob(KIND, res.prompt_id, startTime.current ?? Date.now())
         // Re-arm the keep-alive service now that the prompt id is known, so
         // its native poll loop can track this specific generation and still
         // notify even if the WebView gets frozen while backgrounded.
@@ -405,7 +409,7 @@ export function useComfyGeneration() {
   const reset = useCallback(() => {
     stopTicking()
     stopKeepAlive()
-    clearActiveJob()
+    clearRemoteJob(KIND)
     activePromptId.current = null
     settle({})
   }, [stopTicking, settle])
@@ -416,7 +420,7 @@ export function useComfyGeneration() {
     } finally {
       stopTicking()
       stopKeepAlive()
-      clearActiveJob()
+      clearRemoteJob(KIND)
       activePromptId.current = null
       settle({})
     }
@@ -436,50 +440,63 @@ export function useComfyGeneration() {
   // live WS update arrives for this prompt id or the immediate /history
   // check below resolves it outright.
   useEffect(() => {
-    const job = loadActiveJob()
-    if (!job) return
+    // Guards against a job resolving into a *cancelled* effect instance —
+    // this fetch is genuinely async now (it wasn't when this read straight
+    // from localStorage), so StrictMode's mount→cleanup→mount can otherwise
+    // have the *first* instance's promise resolve after its own cleanup
+    // already ran, setting up a second, duplicate set of intervals on top of
+    // the second (legitimate) instance's.
+    let cancelled = false
 
-    activePromptId.current = job.promptId
-    startTime.current = job.startedAt
-    consecutivePollFailures.current = 0
+    loadRemoteJob(KIND).then((job) => {
+      if (cancelled || !job) return
 
-    setState({
-      ...initialState,
-      status: 'running',
-      recovering: true,
-      elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)),
-    })
-    startKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: job.promptId, videoNodeId: VIDEO_OUTPUT_NODE_ID })
+      activePromptId.current = job.promptId
+      startTime.current = job.startedAt
+      consecutivePollFailures.current = 0
 
-    stopTicking()
-    tickInterval.current = setInterval(() => {
-      setState((s) => {
-        if (s.status !== 'queued' && s.status !== 'running') return s
-        return {
-          ...s,
-          elapsedSeconds: startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : s.elapsedSeconds,
-          eta: computeEta(s.samplingProgress, samplingPhaseStart.current),
-        }
+      setState({
+        ...initialState,
+        status: 'running',
+        recovering: true,
+        elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)),
       })
-    }, 1000)
-    pollInterval.current = setInterval(() => {
-      if (activePromptId.current) pollHistoryOnce(activePromptId.current)
-    }, HISTORY_POLL_MS)
+      startKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: job.promptId, videoNodeId: VIDEO_OUTPUT_NODE_ID })
 
-    // Resolve immediately instead of waiting up to HISTORY_POLL_MS — the
-    // job may well have already finished while the page was gone.
-    pollHistoryOnce(job.promptId)
+      stopTicking()
+      tickInterval.current = setInterval(() => {
+        setState((s) => {
+          if (s.status !== 'queued' && s.status !== 'running') return s
+          return {
+            ...s,
+            elapsedSeconds: startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : s.elapsedSeconds,
+            eta: computeEta(s.samplingProgress, samplingPhaseStart.current),
+          }
+        })
+      }, 1000)
+      pollInterval.current = setInterval(() => {
+        if (activePromptId.current) pollHistoryOnce(activePromptId.current)
+      }, HISTORY_POLL_MS)
+
+      // Resolve immediately instead of waiting up to HISTORY_POLL_MS — the
+      // job may well have already finished while the page was gone.
+      pollHistoryOnce(job.promptId)
+    })
 
     // Returning this cleanup isn't just tidiness: React StrictMode (which
     // this app genuinely runs under in production too, not just local dev
     // tooling — see main.tsx) deliberately double-invokes an effect's first
     // mount (setup → cleanup → setup again) to catch exactly this kind of
-    // bug. Without a cleanup here, that second setup would overwrite
-    // tickInterval/pollInterval with fresh timers while the first pair kept
-    // running unreferenced forever — two ticking intervals and two /history
-    // pollers for the same recovered job. With it, the sequence nets out to
-    // exactly one of each, same as it would without StrictMode.
-    return stopTicking
+    // bug. Without it, that second setup could overwrite tickInterval/
+    // pollInterval with fresh timers while the first pair kept running
+    // unreferenced forever — two ticking intervals and two /history pollers
+    // for the same recovered job. With it (plus the `cancelled` guard
+    // above), the sequence nets out to exactly one of each, same as it
+    // would without StrictMode.
+    return () => {
+      cancelled = true
+      stopTicking()
+    }
     // Mount-only by design (recovery happens once, right after the hook is
     // first used) — pollHistoryOnce/stopTicking are stable useCallbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps

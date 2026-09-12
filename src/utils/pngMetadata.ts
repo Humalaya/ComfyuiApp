@@ -68,6 +68,35 @@ export function extractShareableMetadataText(chunks: Record<string, string>): st
   return null
 }
 
+// ComfyUI serializes its own workflow JSON in Python (json.dumps), which
+// happily writes bare NaN/Infinity/-Infinity tokens — that's valid Python
+// json output but NOT valid JSON per spec, so JSON.parse rejects it outright.
+// This actually happens in practice: e.g. LoadImageCrop's IS_CHANGED comes
+// back NaN whenever its optional image input is left empty (the normal case
+// for the video workflow's "Last Frame" slot, which defaults to unused), so
+// a "prompt" chunk containing something like `"is_changed": NaN}` is the norm
+// for most video outputs, not a rare corruption. Every one of them silently
+// failed to parse before this — recognized as ComfyUI metadata (the raw text
+// still showed fine, since that only needs the chunk, not a parse), but with
+// no settings ever extracted, e.g. Gallery's "send settings" always fell back
+// to image-only. Swapping the bare token for `null` (only where it appears in
+// a value position: right after `:`, `,` or `[`) fixes parsing without
+// touching anything inside actual string values.
+function sanitizeNonFiniteJsonLiterals(text: string): string {
+  return text.replace(/([:,[]\s*)(-?Infinity|NaN)(?=\s*[,\]}])/g, '$1null')
+}
+
+// The one place this app should ever JSON.parse a PNG's "prompt" chunk —
+// callers get the sanitizing above for free instead of each needing to
+// remember it.
+export function parseComfyWorkflowJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return JSON.parse(sanitizeNonFiniteJsonLiterals(raw))
+  }
+}
+
 // A1111/Forge's "parameters" block has no structured fields to map onto this
 // app's (unrelated) MiniMax H3 node graph — but the positive prompt itself is
 // still worth carrying over. It's whatever comes before "Negative prompt:"

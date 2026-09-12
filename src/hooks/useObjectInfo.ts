@@ -4,6 +4,11 @@ import { extractComboOptions, getObjectInfo } from '../api/comfyClient'
 interface ObjectInfoState {
   aspectRatios: string[]
   unetNames: string[]
+  // Same UNETLoader combo as unetNames, filtered to the "image" subfolder
+  // instead of "video" — Krea2/FLUX's diffusion model lives there (see
+  // krea2FieldMap.ts), sharing the folder with SDXL-adjacent checkpoints even
+  // though SDXL itself uses a separate CheckpointLoaderSimple, not UNETLoader.
+  krea2UnetNames: string[]
   loraNames: string[]
   // Checkpoints (used by the Text2Img screen's CheckpointLoaderSimple) —
   // fetched here alongside everything else rather than in a separate hook,
@@ -11,6 +16,17 @@ interface ObjectInfoState {
   // the same way (same underlying folder, regardless of which node class
   // exposes the combo).
   checkpointNames: string[]
+  // Standard ComfyUI sampler/scheduler enums — confirmed via /object_info to
+  // be the exact same list on plain KSampler (SDXL), KSamplerSelect (video),
+  // and BasicScheduler's own scheduler field (video), so one fetch covers
+  // both the SDXL and video tabs' "Gelişmiş Ayarlar".
+  samplerNames: string[]
+  schedulerNames: string[]
+  // Krea2's ClownsharKSampler_Beta (RES4LYF) has its own, much larger sampler
+  // list — completely different from the standard one above — but the same
+  // standard scheduler list, so it reuses schedulerNames rather than needing
+  // its own.
+  krea2SamplerNames: string[]
   loading: boolean
   error: string | null
 }
@@ -18,8 +34,12 @@ interface ObjectInfoState {
 const initialState: ObjectInfoState = {
   aspectRatios: [],
   unetNames: [],
+  krea2UnetNames: [],
   loraNames: [],
   checkpointNames: [],
+  samplerNames: [],
+  schedulerNames: [],
+  krea2SamplerNames: [],
   loading: true,
   error: null,
 }
@@ -60,18 +80,24 @@ export function useObjectInfo() {
 
     async function load() {
       try {
-        const [resolution, unet, lora, checkpoint] = await Promise.all([
+        const [resolution, unet, lora, checkpoint, ksampler, krea2Sampler] = await Promise.all([
           getObjectInfo('ResolutionSelector'),
           getObjectInfo('UNETLoader'),
           getObjectInfo('LoraLoader'),
           getObjectInfo('CheckpointLoaderSimple'),
+          getObjectInfo('KSampler'),
+          getObjectInfo('ClownsharKSampler_Beta'),
         ])
         if (cancelled) return
         setState({
           aspectRatios: extractComboOptions(resolution['ResolutionSelector'], 'aspect_ratio'),
           unetNames: filterByFolder(extractComboOptions(unet['UNETLoader'], 'unet_name'), 'video'),
+          krea2UnetNames: filterByFolder(extractComboOptions(unet['UNETLoader'], 'unet_name'), 'image'),
           loraNames: extractComboOptions(lora['LoraLoader'], 'lora_name'),
           checkpointNames: extractComboOptions(checkpoint['CheckpointLoaderSimple'], 'ckpt_name'),
+          samplerNames: extractComboOptions(ksampler['KSampler'], 'sampler_name'),
+          schedulerNames: extractComboOptions(ksampler['KSampler'], 'scheduler'),
+          krea2SamplerNames: extractComboOptions(krea2Sampler['ClownsharKSampler_Beta'], 'sampler_name'),
           loading: false,
           error: null,
         })

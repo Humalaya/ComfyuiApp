@@ -27,7 +27,7 @@ export function normalizeKrea2Settings(raw: unknown, defaults: Krea2GenerationSe
   const r = raw as Partial<Krea2GenerationSettings>
   return {
     prompt: typeof r.prompt === 'string' ? r.prompt : defaults.prompt,
-    negativePrompt: typeof r.negativePrompt === 'string' ? r.negativePrompt : defaults.negativePrompt,
+    unetName: typeof r.unetName === 'string' ? r.unetName : defaults.unetName,
     seed: typeof r.seed === 'number' && Number.isFinite(r.seed) ? r.seed : defaults.seed,
     fixedSeed: typeof r.fixedSeed === 'boolean' ? r.fixedSeed : defaults.fixedSeed,
     width: typeof r.width === 'number' && Number.isFinite(r.width) ? r.width : defaults.width,
@@ -36,6 +36,12 @@ export function normalizeKrea2Settings(raw: unknown, defaults: Krea2GenerationSe
     batchCount: typeof r.batchCount === 'number' && Number.isFinite(r.batchCount) ? r.batchCount : defaults.batchCount,
     steps1: typeof r.steps1 === 'number' && Number.isFinite(r.steps1) ? r.steps1 : defaults.steps1,
     steps2: typeof r.steps2 === 'number' && Number.isFinite(r.steps2) ? r.steps2 : defaults.steps2,
+    samplerName1: typeof r.samplerName1 === 'string' ? r.samplerName1 : defaults.samplerName1,
+    scheduler1: typeof r.scheduler1 === 'string' ? r.scheduler1 : defaults.scheduler1,
+    denoise1: typeof r.denoise1 === 'number' && Number.isFinite(r.denoise1) ? r.denoise1 : defaults.denoise1,
+    samplerName2: typeof r.samplerName2 === 'string' ? r.samplerName2 : defaults.samplerName2,
+    scheduler2: typeof r.scheduler2 === 'string' ? r.scheduler2 : defaults.scheduler2,
+    denoise2: typeof r.denoise2 === 'number' && Number.isFinite(r.denoise2) ? r.denoise2 : defaults.denoise2,
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, KREA2_LORA_SLOT_COUNT),
   }
 }

@@ -20,9 +20,14 @@ interface Props {
   recovering: boolean
   wsStatus: ComfyConnectionStatus
   onCancel: () => void
-  // Opens GenerationFullscreenViewer at this index within the caller's own
-  // history list — see App.tsx's viewerIndex/completedResults.
-  onOpenViewer: (index: number) => void
+  // Opens GenerationFullscreenViewer at this url — see App.tsx's
+  // viewerUrl/completedResults.
+  onOpenViewer: (url: string) => void
+  // Every file across the whole session's history, most recent first
+  // (App.tsx's completedResults, mapped down to plain urls) — shown as a
+  // small thumbnail strip regardless of status, so browsing past results
+  // never depends on which state the current job happens to be in.
+  historyUrls: string[]
 }
 
 function wsStatusLabel(status: ComfyConnectionStatus): string | null {
@@ -54,6 +59,7 @@ export function StatusPanel({
   wsStatus,
   onCancel,
   onOpenViewer,
+  historyUrls,
 }: Props) {
   const resultRef = useRef<HTMLDivElement>(null)
 
@@ -77,7 +83,7 @@ export function StatusPanel({
           Sonucu Görüntüle
         </button>
         <div ref={resultRef}>
-          <ResultCarousel key={result.promptId} urls={result.urls} kind="video" onOpen={onOpenViewer} />
+          <ResultCarousel key={result.promptId} urls={historyUrls} kind="video" onOpen={onOpenViewer} />
         </div>
       </div>
     )
@@ -95,7 +101,10 @@ export function StatusPanel({
 
   return (
     <div className="status-panel">
-      <div className="status-title">{status === 'queued' ? 'Sırada bekleniyor…' : 'Oluşturuluyor…'}</div>
+      <div className="status-panel-header-row">
+        <div className="status-title">{status === 'queued' ? 'Sırada bekleniyor…' : 'Oluşturuluyor…'}</div>
+        <ResultCarousel urls={historyUrls} kind="video" onOpen={onOpenViewer} compact />
+      </div>
 
       {connectionLost && (
         <div className="status-warning">⚠ ComfyUI'ye ulaşılamıyor — sunucu kapalı veya çökmüş olabilir. Yeniden denenmeye devam ediliyor…</div>

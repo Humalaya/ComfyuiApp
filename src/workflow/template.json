@@ -381,6 +381,17 @@
       "title": "Load Image & Crop"
     }
   },
+  "900": {
+    "inputs": {
+      "image": "",
+      "crop": "",
+      "max_megapixels": 2
+    },
+    "class_type": "LoadImageCrop",
+    "_meta": {
+      "title": "Load Image & Crop (Last Frame)"
+    }
+  },
   "691": {
     "inputs": {
       "max_resolution": 1024,

@@ -3,37 +3,66 @@ import { useRef, useState } from 'react'
 interface Props {
   urls: string[]
   kind: 'image' | 'video'
-  // Tapping the big media area calls this with the tapped item's index
-  // (within `urls`) instead of doing nothing — the caller opens a
-  // GenerationFullscreenViewer at that position over its own, longer running
-  // history list (see App.tsx/ImageGenerateTab.tsx/Krea2GenerateTab.tsx),
-  // which is a superset of `urls` in the same order (this batch's own files
-  // always sit at the front of that history the moment they're clickable).
-  // Optional so ResultCarousel stays usable standalone.
-  onOpen?: (index: number) => void
+  // Tapping a thumbnail (compact mode) or the big media area (normal mode)
+  // calls this with that item's url instead of doing nothing — the caller
+  // opens a GenerationFullscreenViewer at that url (see App.tsx/
+  // ImageGenerateTab.tsx/Krea2GenerateTab.tsx). Optional so ResultCarousel
+  // stays usable standalone.
+  onOpen?: (url: string) => void
+  // No big preview, just the small thumbnail strip — every tap opens
+  // GenerationFullscreenViewer directly instead of promoting a thumbnail to
+  // a (nonexistent) big slot. Used in the running/queued status panel, which
+  // has no room for a full-size preview since the live progress/preview
+  // already occupies that space; the "✓ Üretim Tamamlandı" card uses the
+  // normal (non-compact) mode instead, which still has that room.
+  compact?: boolean
 }
 
-// A batch job (Batch Size > 1) saves several files, but only ever handing
-// the first one to the caller silently threw the rest away from the app's
-// UI — they were still safe on disk/in Galeri, just invisible right where
-// the user is actually looking the moment a generation finishes. This shows
-// the selected file large, with the rest as a thumbnail strip underneath
-// (only rendered at all once there's more than one) — tap a thumbnail, or
-// swipe left/right on the large one, to switch which is selected.
+// Shows every file across the whole session's history (not just the current
+// job's own batch) as a thumbnail strip — a batch job (Batch Size > 1) saves
+// several files, and previous jobs' files are just as reachable, all in one
+// place instead of only ever showing the single most recent file. In normal
+// mode the selected file is also shown large above the strip (tap it, or
+// swipe left/right, to switch which is selected); in compact mode there's no
+// large slot, so a tap opens the fullscreen viewer immediately instead.
 //
 // Selection intentionally resets to the first item whenever a *new* batch
 // replaces this one, not just when the index goes stale — callers do this by
 // passing `key={result.promptId}` (see StatusPanel.tsx/ImageGenerateTab.tsx/
-// Krea2GenerateTab.tsx), which remounts this component fresh instead of
-// needing an effect to notice the urls prop changed.
-export function ResultCarousel({ urls, kind, onOpen }: Props) {
+// Krea2GenerateTab.tsx) on the non-compact usage, which remounts this
+// component fresh instead of needing an effect to notice the urls prop
+// changed. Compact mode has no selection state to reset in the first place.
+export function ResultCarousel({ urls, kind, onOpen, compact = false }: Props) {
   const [index, setIndex] = useState(0)
   const touchStartX = useRef<number | null>(null)
   const touchStartY = useRef<number | null>(null)
 
-  const safeIndex = Math.min(index, Math.max(urls.length - 1, 0))
+  if (urls.length === 0) return null
+
+  if (compact) {
+    return (
+      <div className="result-carousel-strip result-carousel-strip-compact">
+        {urls.map((u) => (
+          <button
+            type="button"
+            key={u}
+            className="result-carousel-thumb result-carousel-thumb-compact"
+            onClick={() => onOpen?.(u)}
+            aria-label="Büyüt"
+          >
+            {kind === 'video' ? (
+              <video src={u} className="result-carousel-thumb-media" muted preload="metadata" />
+            ) : (
+              <img src={u} alt="" className="result-carousel-thumb-media" loading="lazy" />
+            )}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  const safeIndex = Math.min(index, urls.length - 1)
   const current = urls[safeIndex]
-  if (!current) return null
 
   function onTouchStart(e: React.TouchEvent) {
     touchStartX.current = e.touches[0].clientX
@@ -52,7 +81,7 @@ export function ResultCarousel({ urls, kind, onOpen }: Props) {
     // and call onOpen a second time.
     if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
       e.preventDefault()
-      onOpen?.(safeIndex)
+      onOpen?.(current)
       return
     }
 
@@ -68,7 +97,7 @@ export function ResultCarousel({ urls, kind, onOpen }: Props) {
     <div className="result-carousel">
       <div
         className={`result-carousel-main ${onOpen ? 'result-carousel-main-clickable' : ''}`}
-        onClick={() => onOpen?.(safeIndex)}
+        onClick={() => onOpen?.(current)}
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >

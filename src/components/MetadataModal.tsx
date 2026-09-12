@@ -5,6 +5,7 @@ interface Props {
   text: string | null
   onClose: () => void
   onSendToCreate?: () => void
+  sendSettingsLabel?: string
   sendingSettings?: boolean
   onSendImageOnly?: () => void
   sendingImage?: boolean
@@ -21,7 +22,7 @@ interface Props {
 // share sheet when available. The textarea itself is always there as a
 // manual fallback (tap, select-all, copy) since navigator.share/clipboard
 // can be unavailable on this app's plain-http/LAN origin.
-export function MetadataModal({ title, text, onClose, onSendToCreate, sendingSettings, onSendImageOnly, sendingImage }: Props) {
+export function MetadataModal({ title, text, onClose, onSendToCreate, sendSettingsLabel, sendingSettings, onSendImageOnly, sendingImage }: Props) {
   if (text === null) return null
 
   const busy = !!sendingSettings || !!sendingImage
@@ -52,7 +53,7 @@ export function MetadataModal({ title, text, onClose, onSendToCreate, sendingSet
           )}
           {onSendToCreate && (
             <button type="button" className="secondary-button metadata-send-button" onClick={onSendToCreate} disabled={busy}>
-              {sendingSettings ? 'Gönderiliyor…' : '📝 Ayarları + Resmi Gönder'}
+              {sendingSettings ? 'Gönderiliyor…' : (sendSettingsLabel ?? '📝 Ayarları Gönder')}
             </button>
           )}
           {onSendImageOnly && (

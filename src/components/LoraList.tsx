@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { NumberField } from './NumberField'
 import { LoraPicker } from './LoraPicker'
 import { loraThumbnailUrl } from '../api/comfyClient'
+import { fetchCivitaiLoraInfo, type CivitaiLoraInfo } from '../api/civitaiClient'
 import type { LoraSlot } from '../workflow/fieldMap'
 
 interface Props {
@@ -29,9 +30,53 @@ export function LoraList({ loras, loraNames, onChange }: Props) {
   // responds 200 with a JSON body when there's no preview file, not a real
   // 404 — an <img> can't tell ahead of time, only onError catches it).
   const [failedThumbs, setFailedThumbs] = useState<Set<number>>(new Set())
+  // Civitai lookup result per slot — 'loading' while in flight. Triggered
+  // two ways: automatically the moment a slot's *local* thumbnail actually
+  // fails (see markThumbFailed), or manually via each card's own "Civitai"
+  // button — the automatic path alone turned out to essentially never fire
+  // for loras that already have a local rgthree preview (most of them, in
+  // practice), which meant there was no way at all to see a lora's trigger
+  // words unless its local thumbnail happened to be missing. The button
+  // fixes that: it works (and is worth pressing) regardless of whether the
+  // thumbnail is already showing something.
+  const [civitaiInfo, setCivitaiInfo] = useState<Record<number, CivitaiLoraInfo | 'loading'>>({})
+  // Which indices have already been auto-requested — a ref (not derived from
+  // civitaiInfo's keys) so a still-in-flight *automatic* request isn't fired
+  // twice. The manual button ignores this and can always re-fetch.
+  const requestedCivitai = useRef<Set<number>>(new Set())
+
+  function fetchCivitai(index: number) {
+    const loraName = loras[index]?.lora
+    if (!loraName) return
+    requestedCivitai.current.add(index)
+    setCivitaiInfo((prev) => ({ ...prev, [index]: 'loading' }))
+    fetchCivitaiLoraInfo(loraName).then((info) => setCivitaiInfo((prev) => ({ ...prev, [index]: info })))
+  }
 
   function markThumbFailed(index: number) {
     setFailedThumbs((s) => (s.has(index) ? s : new Set(s).add(index)))
+    if (requestedCivitai.current.has(index)) return
+    fetchCivitai(index)
+  }
+
+  // A slot changing to a different lora invalidates whatever was cached for
+  // its *previous* one — both the "local thumbnail failed" flag and any
+  // Civitai result, so the new lora gets its own fresh attempt instead of
+  // inheriting the old one's.
+  function forgetCachedThumb(index: number) {
+    setFailedThumbs((s) => {
+      if (!s.has(index)) return s
+      const next = new Set(s)
+      next.delete(index)
+      return next
+    })
+    requestedCivitai.current.delete(index)
+    setCivitaiInfo((prev) => {
+      if (!(index in prev)) return prev
+      const next = { ...prev }
+      delete next[index]
+      return next
+    })
   }
 
   const activeCount = loras.filter((l) => l.on && l.lora).length
@@ -47,62 +92,107 @@ export function LoraList({ loras, loraNames, onChange }: Props) {
       </button>
       {open && (
         <div className="lora-grid">
-          {loras.map((slot, i) => (
-            <div key={i} className={`lora-card ${slot.on ? 'lora-card-on' : ''}`}>
-              {loraNames.length > 0 ? (
-                <button type="button" className="lora-select" onClick={() => setPickerIndex(i)}>
-                  <span className="lora-select-label" title={slot.lora}>
-                    {slot.lora || 'LoRA seç…'}
+          {loras.map((slot, i) => {
+            const civitaiEntry = civitaiInfo[i]
+            const civitaiLoading = civitaiEntry === 'loading'
+            const civitai = civitaiEntry && civitaiEntry !== 'loading' ? civitaiEntry : undefined
+            // Local rgthree preview first; only once *that* has failed (and
+            // only then) does a Civitai image get shown, if one was found —
+            // pressing the button below when a local preview already loaded
+            // fine still fetches trigger words/model name, it just doesn't
+            // replace a thumbnail that already works.
+            const civitaiImage = failedThumbs.has(i) ? civitai?.imageUrl : null
+
+            return (
+              <div key={i} className={`lora-card ${slot.on ? 'lora-card-on' : ''}`}>
+                {loraNames.length > 0 ? (
+                  <button type="button" className="lora-select" onClick={() => setPickerIndex(i)}>
+                    <span className="lora-select-label" title={slot.lora}>
+                      {slot.lora || 'LoRA seç…'}
+                    </span>
+                  </button>
+                ) : (
+                  <span className="lora-name" title={slot.lora}>
+                    {slot.lora}
                   </span>
-                </button>
-              ) : (
-                <span className="lora-name" title={slot.lora}>
-                  {slot.lora}
-                </span>
-              )}
-
-              <button
-                type="button"
-                className={`lora-thumb ${slot.on ? 'lora-thumb-on' : ''}`}
-                onClick={() => slot.lora && onChange(i, { ...slot, on: !slot.on })}
-                disabled={!slot.lora}
-                aria-pressed={slot.on}
-                aria-label={slot.on ? 'Kapat' : 'Aç'}
-              >
-                {slot.lora && !failedThumbs.has(i) && (
-                  <img
-                    src={loraThumbnailUrl(slot.lora)}
-                    alt=""
-                    className="lora-thumb-img"
-                    loading="lazy"
-                    onError={() => markThumbFailed(i)}
-                  />
                 )}
-              </button>
 
-              <div className="lora-weight-row">
-                <input
-                  type="range"
-                  min={0}
-                  max={2}
-                  step={0.05}
-                  value={slot.strength}
-                  disabled={!slot.on}
-                  onChange={(e) => onChange(i, { ...slot, strength: Number(e.target.value) })}
-                  className="lora-strength"
-                />
-                <NumberField
-                  min={0}
-                  max={2}
-                  step={0.05}
-                  value={slot.strength}
-                  disabled={!slot.on}
-                  onChange={(v) => onChange(i, { ...slot, strength: v })}
-                  className="lora-strength-value"
-                />
+                <button
+                  type="button"
+                  className={`lora-thumb ${slot.on ? 'lora-thumb-on' : ''}`}
+                  onClick={() => slot.lora && onChange(i, { ...slot, on: !slot.on })}
+                  disabled={!slot.lora}
+                  aria-pressed={slot.on}
+                  aria-label={slot.on ? 'Kapat' : 'Aç'}
+                >
+                  {slot.lora &&
+                    (!failedThumbs.has(i) ? (
+                      <img
+                        src={loraThumbnailUrl(slot.lora)}
+                        alt=""
+                        className="lora-thumb-img"
+                        loading="lazy"
+                        onError={() => markThumbFailed(i)}
+                      />
+                    ) : (
+                      civitaiImage && (
+                        <img
+                          src={civitaiImage}
+                          alt=""
+                          className="lora-thumb-img"
+                          loading="lazy"
+                          // Civitai returned a URL but it didn't actually load
+                          // (dead link, network hiccup) — fall back to the
+                          // blank box rather than a broken-image icon.
+                          onError={() => setCivitaiInfo((prev) => ({ ...prev, [i]: { ...civitai, imageUrl: null } as CivitaiLoraInfo }))}
+                        />
+                      )
+                    ))}
+                </button>
+
+                {/* Explicit, always-available trigger — the automatic fetch
+                    above only ever fires when the *local* thumbnail fails,
+                    which turned out to essentially never happen for loras
+                    that already have one (most of them). This is the only
+                    way to see trigger words for those. */}
+                {slot.lora && (
+                  <button type="button" className="lora-civitai-button" onClick={() => fetchCivitai(i)} disabled={civitaiLoading}>
+                    {civitaiLoading ? 'Getiriliyor…' : civitai ? '🔄 Civitai' : "🌐 Civitai'den Getir"}
+                  </button>
+                )}
+
+                {civitai && !civitai.found && <div className="lora-trigger-words">Civitai'de bulunamadı.</div>}
+
+                {civitai?.triggerWords && civitai.triggerWords.length > 0 && (
+                  <div className="lora-trigger-words" title="Civitai tetik kelimeleri">
+                    {civitai.triggerWords.join(', ')}
+                  </div>
+                )}
+
+                <div className="lora-weight-row">
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={slot.strength}
+                    disabled={!slot.on}
+                    onChange={(e) => onChange(i, { ...slot, strength: Number(e.target.value) })}
+                    className="lora-strength"
+                  />
+                  <NumberField
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={slot.strength}
+                    disabled={!slot.on}
+                    onChange={(v) => onChange(i, { ...slot, strength: v })}
+                    className="lora-strength-value"
+                  />
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -111,12 +201,7 @@ export function LoraList({ loras, loraNames, onChange }: Props) {
           value={loras[pickerIndex].lora}
           options={loraNames}
           onSelect={(name) => {
-            setFailedThumbs((s) => {
-              if (!s.has(pickerIndex)) return s
-              const next = new Set(s)
-              next.delete(pickerIndex)
-              return next
-            })
+            forgetCachedThumb(pickerIndex)
             // Picking a real LoRA turns the slot on — clearing it back to
             // "— Seçili değil —" turns it back off, since an enabled slot
             // with nothing selected doesn't mean anything to buildWorkflow.

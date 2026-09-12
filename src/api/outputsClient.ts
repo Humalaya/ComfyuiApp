@@ -17,8 +17,8 @@ export interface OutputSource {
 
 // One directory level: subfolders (as full paths relative to the source
 // root) to navigate into, plus the media files directly inside it. Never
-// recursive — a source organized into subfolders (e.g. Forge's
-// txt2img-images/<date>/) is browsed folder-by-folder instead of being
+// recursive — a source organized into subfolders (e.g. each generation
+// type's own <date>/ subfolder) is browsed folder-by-folder instead of being
 // flattened into one giant list.
 export interface OutputListing {
   folders: string[]
@@ -55,4 +55,21 @@ export function outputThumbnailUrl(source: string, name: string): string {
 
 export function outputDownloadUrl(source: string, name: string): string {
   return `/api/outputs/download?source=${encodeURIComponent(source)}&name=${encodeURIComponent(name)}`
+}
+
+const MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+}
+
+// Used by the native SaveMedia plugin (see src/native/saveMedia.ts) — it
+// needs a real MIME type to write a MediaStore entry other apps recognize as
+// an actual photo/video, not just a request-carried Content-Type.
+export function outputMimeType(ext: string): string {
+  return MIME_TYPES[ext.toLowerCase()] ?? 'application/octet-stream'
 }
