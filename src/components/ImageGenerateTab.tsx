@@ -8,6 +8,7 @@ import { CollapsibleSection } from './CollapsibleSection'
 import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useImageGeneration } from '../hooks/useImageGeneration'
 import { buildImageWorkflow, getDefaultImageSettings, IMAGE_OUTPUT_NODE_ID, QUALITY_PRESETS, type ImageGenerationSettings } from '../workflow/imageFieldMap'
+import { appendTriggerWords } from '../utils/promptText'
 import type { LoraSlot } from '../workflow/fieldMap'
 import { loadImageSettings, normalizeImageSettings, saveImageSettings } from '../storage/imageSettingsStorage'
 import { loadRemoteQueue, saveRemoteQueue } from '../storage/remoteQueueStorage'
@@ -328,7 +329,12 @@ export function ImageGenerateTab({ importRequest }: Props) {
         </select>
       </div>
 
-      <LoraList loras={settings.loras} loraNames={objectInfo.loraNames} onChange={updateLora} />
+      <LoraList
+        loras={settings.loras}
+        loraNames={objectInfo.loraNames}
+        onChange={updateLora}
+        onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
+      />
 
       <div className="field-row">
         <div className="field">

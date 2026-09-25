@@ -497,6 +497,20 @@ input[type='range'] {
   opacity: 0.6;
 }
 
+/* "→ Prompta Gönder" — appends this slot's Civitai trigger words to the
+   prompt (see promptText.ts). Accent-colored (unlike the neutral
+   .lora-civitai-button above it) since this one directly changes the
+   prompt, not just fetches info. */
+.lora-trigger-send-button {
+  width: 100%;
+  padding: 5px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-dim);
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.72rem;
+}
+
 .lora-weight-row {
   display: flex;
   align-items: center;

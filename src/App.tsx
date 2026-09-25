@@ -4,6 +4,7 @@ import { NumberField } from './components/NumberField'
 import { CollapsibleSection } from './components/CollapsibleSection'
 import { ImportPngButton } from './components/ImportPngButton'
 import { LoraList } from './components/LoraList'
+import { appendTriggerWords } from './utils/promptText'
 import { StatusPanel } from './components/StatusPanel'
 import { GenerationFullscreenViewer } from './components/GenerationFullscreenViewer'
 import { Gallery, type ImportPayload } from './components/Gallery'
@@ -625,7 +626,12 @@ export default function App() {
           </select>
         </div>
 
-        <LoraList loras={settings.loras} loraNames={objectInfo.loraNames} onChange={updateLora} />
+        <LoraList
+          loras={settings.loras}
+          loraNames={objectInfo.loraNames}
+          onChange={updateLora}
+          onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
+        />
 
         <div className="field-row">
           <div className="field">

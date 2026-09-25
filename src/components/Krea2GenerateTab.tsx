@@ -10,6 +10,7 @@ import { useImageGeneration } from '../hooks/useImageGeneration'
 import { buildKrea2Workflow, getDefaultKrea2Settings, KREA2_OUTPUT_NODE_ID, type Krea2GenerationSettings } from '../workflow/krea2FieldMap'
 import type { LoraSlot } from '../workflow/fieldMap'
 import { loadKrea2Settings, normalizeKrea2Settings, saveKrea2Settings } from '../storage/krea2SettingsStorage'
+import { appendTriggerWords } from '../utils/promptText'
 import { loadRemoteQueue, saveRemoteQueue } from '../storage/remoteQueueStorage'
 
 function randomSeed() {
@@ -308,7 +309,12 @@ export function Krea2GenerateTab({ importRequest }: Props) {
         <span className="field-hint">{settings.fixedSeed ? 'Sabit — her üretimde aynı seed kullanılır' : 'Rastgele — her üretimde yeni bir seed seçilir'}</span>
       </div>
 
-      <LoraList loras={settings.loras} loraNames={objectInfo.loraNames} onChange={updateLora} />
+      <LoraList
+        loras={settings.loras}
+        loraNames={objectInfo.loraNames}
+        onChange={updateLora}
+        onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
+      />
 
       <CollapsibleSection title="Gelişmiş Ayarlar">
         <span className="field-hint">Bu workflow iki geçişli olduğu için her ayar da ayrı ayrı — 1. Geçiş ve 2. Geçiş kendi sampler/scheduler/denoise'una sahip.</span>

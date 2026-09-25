@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { outputFileUrl, outputMimeType, type OutputFile } from '../api/outputsClient'
-import { canSaveMediaNatively, saveMediaToDevice, shareMediaFromDevice } from '../native/saveMedia'
+import { canSaveMediaNatively, copyMediaToClipboard, saveMediaToDevice, shareMediaFromDevice } from '../native/saveMedia'
 
 interface Props {
   source: string
@@ -39,7 +39,7 @@ export function FullscreenViewer({ source, item, hasPrev, hasNext, onPrev, onNex
   // never intercepts long-press there — doing so would only break the
   // browser's own working save behavior for no benefit.
   const [actionMenuOpen, setActionMenuOpen] = useState(false)
-  const [pendingAction, setPendingAction] = useState<'save' | 'share' | null>(null)
+  const [pendingAction, setPendingAction] = useState<'save' | 'copy' | 'share' | null>(null)
 
   useEffect(() => {
     setLoadError(false)
@@ -72,6 +72,25 @@ export function FullscreenViewer({ source, item, hasPrev, hasNext, onPrev, onNex
       setActionMenuOpen(false)
     } catch (err) {
       alert(`Kaydedilemedi: ${(err as Error).message}`)
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  // Images only (see the menu render below) — copies the picture itself
+  // onto the clipboard so it can be pasted straight into WhatsApp, Gmail,
+  // etc., instead of going through the share sheet for something this
+  // quick. Videos keep "Paylaş" — pasting a video isn't a thing most apps
+  // expect, unlike an image.
+  async function handleCopy() {
+    if (!item) return
+    setPendingAction('copy')
+    try {
+      const url = new URL(outputFileUrl(source, item.name), window.location.href).href
+      await copyMediaToClipboard(url, baseName(item.name))
+      setActionMenuOpen(false)
+    } catch (err) {
+      alert(`Kopyalanamadı: ${(err as Error).message}`)
     } finally {
       setPendingAction(null)
     }
@@ -157,9 +176,15 @@ export function FullscreenViewer({ source, item, hasPrev, hasNext, onPrev, onNex
             <button type="button" className="secondary-button" onClick={handleSave} disabled={!!pendingAction}>
               {pendingAction === 'save' ? 'Kaydediliyor…' : '💾 Kaydet'}
             </button>
-            <button type="button" className="secondary-button" onClick={handleShare} disabled={!!pendingAction}>
-              {pendingAction === 'share' ? 'Hazırlanıyor…' : '📤 Paylaş'}
-            </button>
+            {item.type === 'image' ? (
+              <button type="button" className="secondary-button" onClick={handleCopy} disabled={!!pendingAction}>
+                {pendingAction === 'copy' ? 'Kopyalanıyor…' : '📋 Kopyala'}
+              </button>
+            ) : (
+              <button type="button" className="secondary-button" onClick={handleShare} disabled={!!pendingAction}>
+                {pendingAction === 'share' ? 'Hazırlanıyor…' : '📤 Paylaş'}
+              </button>
+            )}
             <button type="button" className="secondary-button" onClick={() => setActionMenuOpen(false)} disabled={!!pendingAction}>
               Vazgeç
             </button>

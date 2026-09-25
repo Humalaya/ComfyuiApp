@@ -14,7 +14,12 @@ import {
   type HistoryOutputFile,
 } from '../api/comfyClient'
 import { buildWorkflow, VIDEO_OUTPUT_NODE_ID, type GenerationSettings } from '../workflow/fieldMap'
-import { startKeepAlive, stopKeepAlive } from '../native/keepAlive'
+// Routed through the coordinator (not keepAlive.ts directly) — Video, SDXL
+// and Krea2 can all have a job running at once, and the native service is a
+// single shared resource; see keepAliveCoordinator.ts for why a plain
+// start()/stop() per hook would let one tab's completion kill another's
+// still-running background protection.
+import { holdKeepAlive, releaseKeepAlive, updateKeepAlive } from '../native/keepAliveCoordinator'
 import { notify } from '../native/notifications'
 import { clearRemoteJob, loadRemoteJob, saveRemoteJob } from '../storage/remoteJobStorage'
 
@@ -162,6 +167,10 @@ export function useComfyGeneration() {
   const tickInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   const consecutivePollFailures = useRef(0)
+  // This hook's own hold on the shared KeepAlive service — see
+  // keepAliveCoordinator.ts. Non-null for exactly as long as a job of ours
+  // is in flight (generate()/recovery through finish/fail/reset/cancel).
+  const keepAliveToken = useRef<symbol | null>(null)
 
   const stopTicking = useCallback(() => {
     if (tickInterval.current !== null) {
@@ -184,7 +193,8 @@ export function useComfyGeneration() {
       if (activePromptId.current !== promptId) return
       activePromptId.current = null
       stopTicking()
-      stopKeepAlive()
+      releaseKeepAlive(keepAliveToken.current)
+      keepAliveToken.current = null
       clearRemoteJob(KIND)
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
       const files = extractVideoFiles(entry.outputs)
@@ -218,7 +228,8 @@ export function useComfyGeneration() {
       if (activePromptId.current !== promptId) return
       activePromptId.current = null
       stopTicking()
-      stopKeepAlive()
+      releaseKeepAlive(keepAliveToken.current)
+      keepAliveToken.current = null
       clearRemoteJob(KIND)
       const error = extractHistoryErrorMessage(entry)
       settle({ status: 'error', error })
@@ -296,7 +307,8 @@ export function useComfyGeneration() {
                   const error = 'Çıktı bulunamadı (workflow beklenmedik şekilde sonuçlandı).'
                   activePromptId.current = null
                   stopTicking()
-                  stopKeepAlive()
+                  releaseKeepAlive(keepAliveToken.current)
+                  keepAliveToken.current = null
                   clearRemoteJob(KIND)
                   settle({ status: 'error', error })
                   notify('✗ Üretim hatası', error)
@@ -306,7 +318,8 @@ export function useComfyGeneration() {
                 const error = (err as Error).message
                 activePromptId.current = null
                 stopTicking()
-                stopKeepAlive()
+                releaseKeepAlive(keepAliveToken.current)
+                keepAliveToken.current = null
                 clearRemoteJob(KIND)
                 settle({ status: 'error', error })
                 notify('✗ Üretim hatası', error)
@@ -336,7 +349,8 @@ export function useComfyGeneration() {
           const error = msg.data.exception_message ?? 'ComfyUI çalıştırma hatası'
           activePromptId.current = null
           stopTicking()
-          stopKeepAlive()
+          releaseKeepAlive(keepAliveToken.current)
+          keepAliveToken.current = null
           clearRemoteJob(KIND)
           settle({ status: 'error', error })
           notify('✗ Üretim hatası', error)
@@ -364,7 +378,7 @@ export function useComfyGeneration() {
       consecutivePollFailures.current = 0
 
       setState({ ...initialState, status: 'queued', totalNodeCount: Object.keys(workflow).length })
-      startKeepAlive()
+      keepAliveToken.current = holdKeepAlive()
 
       stopTicking()
       tickInterval.current = setInterval(() => {
@@ -388,16 +402,18 @@ export function useComfyGeneration() {
         // refresh) can recover this generation instead of losing track of it
         // entirely — see the mount-time recovery effect below.
         saveRemoteJob(KIND, res.prompt_id, startTime.current ?? Date.now())
-        // Re-arm the keep-alive service now that the prompt id is known, so
-        // its native poll loop can track this specific generation and still
-        // notify even if the WebView gets frozen while backgrounded.
-        startKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: res.prompt_id, videoNodeId: VIDEO_OUTPUT_NODE_ID })
+        // Re-point the keep-alive service's poll/notify target now that the
+        // prompt id is known, so its native poll loop can track this
+        // specific generation and still notify even if the WebView gets
+        // frozen while backgrounded. Doesn't touch the hold from above.
+        updateKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: res.prompt_id, videoNodeId: VIDEO_OUTPUT_NODE_ID })
         pollInterval.current = setInterval(() => {
           if (activePromptId.current) pollHistoryOnce(activePromptId.current)
         }, HISTORY_POLL_MS)
       } catch (err) {
         stopTicking()
-        stopKeepAlive()
+        releaseKeepAlive(keepAliveToken.current)
+        keepAliveToken.current = null
         // activePromptId.current was never set in this branch — ComfyUI
         // never got this prompt at all (most likely it's unreachable).
         settle({ status: 'error', error: (err as Error).message, preflightFailure: true })
@@ -408,7 +424,8 @@ export function useComfyGeneration() {
 
   const reset = useCallback(() => {
     stopTicking()
-    stopKeepAlive()
+    releaseKeepAlive(keepAliveToken.current)
+    keepAliveToken.current = null
     clearRemoteJob(KIND)
     activePromptId.current = null
     settle({})
@@ -419,7 +436,8 @@ export function useComfyGeneration() {
       await interrupt()
     } finally {
       stopTicking()
-      stopKeepAlive()
+      releaseKeepAlive(keepAliveToken.current)
+      keepAliveToken.current = null
       clearRemoteJob(KIND)
       activePromptId.current = null
       settle({})
@@ -461,7 +479,8 @@ export function useComfyGeneration() {
         recovering: true,
         elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)),
       })
-      startKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: job.promptId, videoNodeId: VIDEO_OUTPUT_NODE_ID })
+      // Fresh hold — nothing was held yet in this brand-new hook instance.
+      keepAliveToken.current = holdKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: job.promptId, videoNodeId: VIDEO_OUTPUT_NODE_ID })
 
       stopTicking()
       tickInterval.current = setInterval(() => {

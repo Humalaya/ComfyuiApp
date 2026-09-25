@@ -9,6 +9,12 @@ interface Props {
   loras: LoraSlot[]
   loraNames: string[]
   onChange: (index: number, slot: LoraSlot) => void
+  // "→ Prompta Gönder" on a Civitai trigger-words result calls this with
+  // those words (already joined, e.g. "trigger1, trigger2") — the caller
+  // owns the actual prompt field, this component never reads or writes it
+  // directly (LoraList is shared by three Create tabs with unrelated
+  // settings shapes, each with its own prompt field).
+  onSendToPrompt: (words: string) => void
 }
 
 // Grid of visual cards (thumbnail + name + weight) instead of the earlier
@@ -22,7 +28,7 @@ interface Props {
 // every tab absurdly tall. Collapsed behind a single toggle — like the old
 // "Gelişmiş Ayarlar" section — the summary line still shows how many are
 // active so nothing gets hidden silently.
-export function LoraList({ loras, loraNames, onChange }: Props) {
+export function LoraList({ loras, loraNames, onChange, onSendToPrompt }: Props) {
   const [open, setOpen] = useState(false)
   // Index of the card whose picker is currently open — only one at a time.
   const [pickerIndex, setPickerIndex] = useState<number | null>(null)
@@ -102,6 +108,8 @@ export function LoraList({ loras, loraNames, onChange }: Props) {
             // fine still fetches trigger words/model name, it just doesn't
             // replace a thumbnail that already works.
             const civitaiImage = failedThumbs.has(i) ? civitai?.imageUrl : null
+            const triggerWordsText =
+              civitai?.triggerWords && civitai.triggerWords.length > 0 ? civitai.triggerWords.join(', ') : null
 
             return (
               <div key={i} className={`lora-card ${slot.on ? 'lora-card-on' : ''}`}>
@@ -163,10 +171,15 @@ export function LoraList({ loras, loraNames, onChange }: Props) {
 
                 {civitai && !civitai.found && <div className="lora-trigger-words">Civitai'de bulunamadı.</div>}
 
-                {civitai?.triggerWords && civitai.triggerWords.length > 0 && (
-                  <div className="lora-trigger-words" title="Civitai tetik kelimeleri">
-                    {civitai.triggerWords.join(', ')}
-                  </div>
+                {triggerWordsText && (
+                  <>
+                    <div className="lora-trigger-words" title="Civitai tetik kelimeleri">
+                      {triggerWordsText}
+                    </div>
+                    <button type="button" className="lora-trigger-send-button" onClick={() => onSendToPrompt(triggerWordsText)}>
+                      → Prompta Gönder
+                    </button>
+                  </>
                 )}
 
                 <div className="lora-weight-row">

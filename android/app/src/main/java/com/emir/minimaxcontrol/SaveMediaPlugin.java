@@ -1,5 +1,7 @@
 package com.emir.minimaxcontrol;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
@@ -22,7 +24,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-// Backs Galeri's long-press "Kaydet"/"Paylaş" menu (see FullscreenViewer.tsx)
+// Backs Galeri's long-press "Kaydet"/"Kopyala"/"Paylaş" menu (see FullscreenViewer.tsx)
 // — Android's WebView (unlike the Chrome *browser app*) has no built-in
 // "save image"/"share image" on long-press of its own; this plugin is what
 // actually makes those work from inside this native-wrapped app.
@@ -71,17 +73,7 @@ public class SaveMediaPlugin extends Plugin {
 
         new Thread(() -> {
             try {
-                byte[] data = downloadBytes(url);
-                File cacheDir = new File(getContext().getCacheDir(), "shared-media");
-                if (!cacheDir.exists() && !cacheDir.mkdirs()) {
-                    throw new Exception("Geçici klasör oluşturulamadı.");
-                }
-                File tempFile = new File(cacheDir, filename);
-                try (FileOutputStream out = new FileOutputStream(tempFile)) {
-                    out.write(data);
-                }
-
-                Uri contentUri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", tempFile);
+                Uri contentUri = downloadToCacheAndGetContentUri(url, filename);
 
                 Intent shareIntent = new Intent(Intent.ACTION_SEND);
                 shareIntent.setType(mimeType);
@@ -98,6 +90,55 @@ public class SaveMediaPlugin extends Plugin {
                 call.reject("Paylaşılamadı: " + e.getMessage(), e);
             }
         }).start();
+    }
+
+    // Copies the image straight onto the system clipboard as a content://
+    // URI (not just its filename/URL as text) — pasting into WhatsApp,
+    // Gmail, etc. then drops in the actual picture, same as copying a photo
+    // out of the system Gallery app would. Android grants the pasting app
+    // read access to the URI itself when it reads the clipboard, same
+    // mechanism the share sheet above relies on — no extra permission
+    // dance needed here beyond the FileProvider grant already in place.
+    @PluginMethod
+    public void copy(PluginCall call) {
+        String url = call.getString("url");
+        String filename = call.getString("filename");
+        if (url == null || filename == null) {
+            call.reject("url ve filename gerekli.");
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                Uri contentUri = downloadToCacheAndGetContentUri(url, filename);
+
+                ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard == null) throw new Exception("Pano servisine erişilemedi.");
+                ClipData clip = ClipData.newUri(getContext().getContentResolver(), "MiniMax Kontrol", contentUri);
+                clipboard.setPrimaryClip(clip);
+
+                call.resolve();
+            } catch (Exception e) {
+                call.reject("Kopyalanamadı: " + e.getMessage(), e);
+            }
+        }).start();
+    }
+
+    // Shared by share() and copy(): downloads the file into the app's own
+    // cache dir and hands back a content:// URI for it via the FileProvider
+    // already declared in AndroidManifest.xml — a raw file:// URI would be
+    // rejected by other apps on modern Android.
+    private Uri downloadToCacheAndGetContentUri(String url, String filename) throws Exception {
+        byte[] data = downloadBytes(url);
+        File cacheDir = new File(getContext().getCacheDir(), "shared-media");
+        if (!cacheDir.exists() && !cacheDir.mkdirs()) {
+            throw new Exception("Geçici klasör oluşturulamadı.");
+        }
+        File tempFile = new File(cacheDir, filename);
+        try (FileOutputStream out = new FileOutputStream(tempFile)) {
+            out.write(data);
+        }
+        return FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", tempFile);
     }
 
     private byte[] downloadBytes(String urlStr) throws Exception {

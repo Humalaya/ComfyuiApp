@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  COMFY_BASE_URL,
   connectComfySocket,
   extractHistoryErrorMessage,
   getHistory,
@@ -11,17 +12,27 @@ import {
   type HistoryOutputFile,
 } from '../api/comfyClient'
 import { notify } from '../native/notifications'
+// Same shared native KeepAlive foreground service useComfyGeneration.ts
+// (video) uses, routed through the coordinator since Video/SDXL/Krea2 can
+// each have a job in flight at once — see keepAliveCoordinator.ts. This
+// used to be entirely absent here (see the comment this replaces): a
+// Text2Img job genuinely used to finish before the screen even had a chance
+// to lock, but that stopped being true the moment a batch/queue made these
+// runs long enough to background during too — and unlike a plain browser
+// tab, this hook had *no* protection at all against the process being
+// killed or the WiFi radio dropping to a power-save mode that resets the
+// socket to ComfyUI, regardless of how long the job actually took.
+import { holdKeepAlive, releaseKeepAlive, updateKeepAlive } from '../native/keepAliveCoordinator'
 import { clearRemoteJob, loadRemoteJob, saveRemoteJob } from '../storage/remoteJobStorage'
 
-// Deliberately much lighter than useComfyGeneration.ts (video): image
-// generations here finish in seconds, not minutes, so the phone is
-// realistically still in the user's hand/foregrounded for the whole thing —
-// none of the video hook's background-survival machinery (WS reconnect, the
-// native KeepAlive foreground service, client-side batching) is pulled in
-// for this. Completion is still decided purely by /history polling, same as
-// before — the WebSocket subscription added below is read-only decoration
-// for live step progress/preview, never the source of truth for "done", so a
-// missed or delayed WS message can never leave this hook stuck.
+// Lighter than useComfyGeneration.ts (video) in one real way: completion is
+// decided purely by /history polling — the WebSocket subscription below is
+// read-only decoration for live step progress/preview, never the source of
+// truth for "done", so a missed or delayed WS message can never leave this
+// hook stuck. It does now pull in the same KeepAlive protection video has
+// (see the import above) and the same "recheck immediately when the app
+// comes back to the foreground" handling, since a queued batch here can run
+// just as long as a video one.
 //
 // It DOES now recover an in-flight job on mount (see the effect near the
 // bottom) the same way useComfyGeneration.ts always has — a generation this
@@ -109,6 +120,10 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
   const startTime = useRef<number | null>(null)
   const tickInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollInterval = useRef<ReturnType<typeof setInterval> | null>(null)
+  // This hook's own hold on the shared KeepAlive service — see
+  // keepAliveCoordinator.ts. Non-null for exactly as long as a job of ours
+  // is in flight (generate()/recovery through finish/fail/reset).
+  const keepAliveToken = useRef<symbol | null>(null)
 
   const stopTimers = useCallback(() => {
     if (tickInterval.current !== null) {
@@ -119,6 +134,28 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
       clearInterval(pollInterval.current)
       pollInterval.current = null
     }
+  }, [])
+
+  // If the user comes back to the tab mid-generation, check immediately
+  // instead of waiting up to POLL_MS for the next scheduled poll — same
+  // rationale as useComfyGeneration.ts's identical handler, and just as
+  // relevant here now that a queued batch can run long enough to background
+  // during.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === 'visible' && activePromptId.current) {
+        pollOnce(activePromptId.current)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+    // pollOnce is defined further below as a stable useCallback; effect order
+    // doesn't matter for a listener registered once and read via closure at
+    // call time... except pollOnce itself isn't hoisted as a value the way a
+    // function declaration would be. See the eslint-disable: this only ever
+    // needs the *latest* pollOnce, not a re-subscribe every time it changes,
+    // and pollOnce's own identity is stable across the hook's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Live step progress + preview only — purely decorative (see the header
@@ -148,6 +185,8 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
       if (activePromptId.current !== promptId) return
       activePromptId.current = null
       stopTimers()
+      releaseKeepAlive(keepAliveToken.current)
+      keepAliveToken.current = null
       clearRemoteJob(kind)
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
       const files = extractImageFiles(entry.outputs, outputNodeId)
@@ -178,6 +217,8 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
       if (activePromptId.current !== promptId) return
       activePromptId.current = null
       stopTimers()
+      releaseKeepAlive(keepAliveToken.current)
+      keepAliveToken.current = null
       clearRemoteJob(kind)
       const error = extractHistoryErrorMessage(entry)
       settle({ status: 'error', error })
@@ -216,6 +257,7 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
 
       startTime.current = Date.now()
       setState({ ...initialState, status: 'running' })
+      keepAliveToken.current = holdKeepAlive()
 
       stopTimers()
       tickInterval.current = setInterval(() => {
@@ -236,22 +278,29 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
         // different device) can recover this generation instead of losing
         // track of it — see the mount-time recovery effect below.
         saveRemoteJob(kind, res.prompt_id, startTime.current ?? Date.now())
+        // Re-point the keep-alive service's poll/notify target now that the
+        // prompt id is known — doesn't touch the hold acquired above.
+        updateKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: res.prompt_id, videoNodeId: outputNodeId })
         pollInterval.current = setInterval(() => {
           if (activePromptId.current) pollOnce(activePromptId.current)
         }, POLL_MS)
       } catch (err) {
         stopTimers()
+        releaseKeepAlive(keepAliveToken.current)
+        keepAliveToken.current = null
         // activePromptId.current was never set in this branch — ComfyUI
         // never got this prompt at all (most likely it's unreachable) — so
         // there's nothing to clear from the remote job store.
         settle({ status: 'error', error: (err as Error).message })
       }
     },
-    [stopTimers, pollOnce, settle, buildWorkflow, kind],
+    [stopTimers, pollOnce, settle, buildWorkflow, kind, outputNodeId],
   )
 
   const reset = useCallback(() => {
     stopTimers()
+    releaseKeepAlive(keepAliveToken.current)
+    keepAliveToken.current = null
     clearRemoteJob(kind)
     activePromptId.current = null
     settle({})
@@ -282,6 +331,8 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
         status: 'running',
         elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)),
       })
+      // Fresh hold — nothing was held yet in this brand-new hook instance.
+      keepAliveToken.current = holdKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: job.promptId, videoNodeId: outputNodeId })
 
       stopTimers()
       tickInterval.current = setInterval(() => {
