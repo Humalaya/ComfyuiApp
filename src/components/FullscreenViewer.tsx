@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { outputFileUrl, outputMimeType, type OutputFile } from '../api/outputsClient'
 import { useSwipe } from '../hooks/useSwipe'
 import { canSaveMediaNatively, copyMediaToClipboard, saveMediaToDevice, shareMediaFromDevice } from '../native/saveMedia'
+import { useBackHandler } from '../native/backButton'
 
 interface Props {
   source: string
@@ -62,6 +63,10 @@ export function FullscreenViewer({ source, item, hasPrev, hasNext, onPrev, onNex
     () => hasNext && onNext(),
     () => hasPrev && onPrev(),
   )
+  useBackHandler(!!item, onClose)
+  // Registered after the viewer's own handler, so back closes the long-press
+  // menu first and only then the viewer.
+  useBackHandler(actionMenuOpen, () => setActionMenuOpen(false))
 
   if (!item) return null
 

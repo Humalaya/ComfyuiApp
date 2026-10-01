@@ -15,6 +15,7 @@ import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useSwipe } from '../hooks/useSwipe'
 import { civitaiToImport, type ImportKind } from '../workflow/civitaiImport'
 import type { ImportPayload } from './Gallery'
+import { useBackHandler } from '../native/backButton'
 
 interface Props {
   onSendToCreate: (payload: ImportPayload) => void
@@ -250,6 +251,9 @@ function CivitaiViewer({ items, index, onIndexChange, onClose, onSend }: ViewerP
   const [generation, setGeneration] = useState<Record<number, CivitaiGeneration | 'loading' | 'error'>>({})
   const [sendOpen, setSendOpen] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
+  useBackHandler(true, onClose)
+  // After the viewer's own handler — back closes the send sheet first.
+  useBackHandler(sendOpen, () => setSendOpen(false))
 
   useEffect(() => {
     setSendOpen(false)

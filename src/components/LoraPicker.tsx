@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { loraThumbnailUrl } from '../api/comfyClient'
 import { HelpTip } from './HelpTip'
 import { isLoraCompatible, loraDisplayName, loraFolder, type LoraFamily, type LoraTab } from '../api/loraMeta'
+import { useBackHandler } from '../native/backButton'
 
 interface Props {
   options: string[]
@@ -24,6 +25,7 @@ export function LoraPicker({ options, tab, families, alreadyAdded, freeSlots, on
   const [folder, setFolder] = useState('')
   const [showIncompatible, setShowIncompatible] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  useBackHandler(true, onClose)
 
   const added = useMemo(() => new Set(alreadyAdded), [alreadyAdded])
   const pool = useMemo(

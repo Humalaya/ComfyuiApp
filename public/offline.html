@@ -38,7 +38,7 @@
 <main>
   <div class="icon">☾</div>
   <h1>Bilgisayara ulaşılamıyor</h1>
-  <p>Bilgisayar uykuda ya da kapalı olabilir. Bu telefonda Tailscale'in açık olduğundan emin ol.</p>
+  <p>Bilgisayar uykuda ya da kapalı olabilir. Evde değilsen bu telefonda Tailscale açık olmalı.</p>
   <button id="wake" class="primary" type="button">Bilgisayarı uyandır</button>
   <div id="status" class="status"></div>
   <button id="retry" class="secondary" type="button">Tekrar dene</button>
@@ -51,7 +51,7 @@
   // Tailscale address. If any of these change, update them and rebuild.
   const PC_MAC = '30:56:0f:5e:8e:52';
   const LAN_BROADCAST = '192.168.1.255';
-  const APP_URL = 'http://100.78.9.7:5173/';
+  const APP_URL = 'http://192.168.1.62:5173/';
   const RELAY_WAKE_URL = 'http://100.71.142.53:8099/wake';
   const PROBE_MS = 3000;
   const WAKE_TIMEOUT_MS = 90000;

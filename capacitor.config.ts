@@ -6,12 +6,13 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // exactly like today; there's no separate "app build" step to keep in sync,
 // only the one-time APK build below.
 //
-// The PC's Tailscale address, not its LAN one: the same app then works at
-// home and away (Tailscale must be on on the phone). At home Tailscale
-// still connects directly over the LAN, so nothing is slower. If the PC's
-// Tailscale IP changes (`tailscale ip -4`), update it here, in
-// public/offline.html, and rebuild the APK.
-const DEV_SERVER_URL = 'http://100.78.9.7:5173';
+// The PC's LAN address — and it works away from home too: the PC advertises
+// exactly this address to the tailnet as a Tailscale subnet route
+// (`tailscale up … --advertise-routes=192.168.1.62/32`, approved in the
+// admin console), so with Tailscale on, the phone reaches it from anywhere;
+// at home it works with Tailscale off as well. If the PC's LAN IP changes,
+// update it here, in public/offline.html and in that route, and rebuild.
+const DEV_SERVER_URL = 'http://192.168.1.62:5173';
 
 const config: CapacitorConfig = {
   appId: 'com.emir.minimaxcontrol',

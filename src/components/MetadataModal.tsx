@@ -1,4 +1,5 @@
 import { canShare, shareText } from '../utils/shareText'
+import { useBackHandler } from '../native/backButton'
 
 interface Props {
   title: string | null
@@ -23,6 +24,7 @@ interface Props {
 // manual fallback (tap, select-all, copy) since navigator.share/clipboard
 // can be unavailable on this app's plain-http/LAN origin.
 export function MetadataModal({ title, text, onClose, onSendToCreate, sendSettingsLabel, sendingSettings, onSendImageOnly, sendingImage }: Props) {
+  useBackHandler(text !== null, onClose)
   if (text === null) return null
 
   const busy = !!sendingSettings || !!sendingImage

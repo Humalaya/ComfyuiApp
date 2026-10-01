@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { ImageUploader } from './components/ImageUploader'
 import { NumberField } from './components/NumberField'
 import { CollapsibleSection } from './components/CollapsibleSection'
@@ -16,6 +16,7 @@ import { OpenWebUiFrame } from './components/OpenWebUiFrame'
 import { CivitaiBrowser } from './components/CivitaiBrowser'
 import { HelpTip } from './components/HelpTip'
 import { randomSeed, SeedField } from './components/SeedField'
+import { exitApp, useRootBackHandler } from './native/backButton'
 import { modelLabel } from './utils/modelLabel'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
@@ -99,6 +100,16 @@ function saveUretView(v: UretView): void {
   } catch {
     /* best effort */
   }
+}
+
+const OFFSCREEN_STYLE: CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  left: '-200vw',
+  // Same width .app gives it when shown (640px max, 16px side padding).
+  width: 'min(640px, calc(100vw - 32px))',
+  visibility: 'hidden',
+  pointerEvents: 'none',
 }
 
 export default function App() {
@@ -207,6 +218,55 @@ export default function App() {
     setTab('uret')
     setDrawerOpen(false)
   }
+
+  // The home screen is whichever of Görsel/Video was used last: the Android
+  // back button returns there from any other view, and exits from there.
+  const homeView = useRef<UretView>(uretView === 'image' || uretView === 'video' ? uretView : 'image')
+  useEffect(() => {
+    if (uretView === 'image' || uretView === 'video') homeView.current = uretView
+  }, [uretView])
+
+  // Overlays (viewers, the drawer, popups…) handle back themselves via
+  // useBackHandler; this only runs when none of them is open. At home,
+  // the first press only shows a hint — a second one within 2 s exits.
+  const [exitHint, setExitHint] = useState(false)
+  const lastHomeBackAt = useRef(0)
+  useRootBackHandler(() => {
+    const atHome = tab === 'uret' && (uretView === 'image' || uretView === 'video')
+    if (!atHome) {
+      goToUret(homeView.current)
+      return
+    }
+    const now = Date.now()
+    if (now - lastHomeBackAt.current < 2000) {
+      exitApp()
+      return
+    }
+    lastHomeBackAt.current = now
+    setExitHint(true)
+  })
+  useEffect(() => {
+    if (!exitHint) return
+    const t = setTimeout(() => setExitHint(false), 2000)
+    return () => clearTimeout(t)
+  }, [exitHint])
+
+  // Every view scrolls the same window, so switching views used to leave the
+  // page wherever the previous one was — usually clamped to the top. Each
+  // view's own position is remembered and restored when it's shown again.
+  const viewKey = tab === 'uret' ? `uret:${uretView}` : tab
+  const scrollByView = useRef(new Map<string, number>())
+  const shownView = useRef(viewKey)
+  useEffect(() => {
+    const onScroll = () => scrollByView.current.set(shownView.current, window.scrollY)
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+  useLayoutEffect(() => {
+    if (shownView.current === viewKey) return
+    shownView.current = viewKey
+    window.scrollTo(0, scrollByView.current.get(viewKey) ?? 0)
+  }, [viewKey])
 
   // Long-press on the "Üret" nav button opens the drawer; a normal tap just
   // returns to the current sub-view. Pointer events (not touch+mouse both) so
@@ -517,9 +577,7 @@ export default function App() {
       </div>
 
       <div style={{ display: tab === 'gallery' ? 'block' : 'none' }}>
-        <Gallery
-          onSendToCreate={handleImport}
-        />
+        <Gallery active={tab === 'gallery'} onSendToCreate={handleImport} />
       </div>
 
       <main className="form" style={{ display: tab === 'uret' && uretView === 'video' ? 'flex' : 'none' }}>
@@ -721,9 +779,18 @@ export default function App() {
         {civitaiVisited && <CivitaiBrowser onSendToCreate={handleImport} />}
       </div>
 
-      <div style={{ display: tab === 'uret' && uretView === 'openwebui' ? 'block' : 'none' }}>
+      {/* Not display:none like the other views: that collapses the iframe's
+          viewport to zero, which OpenWebUI answers by losing its own scroll
+          position in the chat. Parked off-screen at full size instead, so
+          from OpenWebUI's side nothing changes while it's hidden. */}
+      <div
+        style={tab === 'uret' && uretView === 'openwebui' ? undefined : OFFSCREEN_STYLE}
+        aria-hidden={!(tab === 'uret' && uretView === 'openwebui')}
+      >
         {openWebUiVisited && <OpenWebUiFrame />}
       </div>
+
+      {exitHint && <div className="app-toast">Çıkmak için tekrar geri bas</div>}
 
       <UretDrawer
         open={drawerOpen}

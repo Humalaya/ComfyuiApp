@@ -2004,3 +2004,20 @@ input[type='range'] {
   align-items: center;
   gap: 8px;
 }
+
+/* "Çıkmak için tekrar geri bas" — see App.tsx's root back handler. */
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 300;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(34, 38, 47, 0.95);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}

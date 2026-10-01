@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useBackHandler } from '../native/backButton'
 
 export type UretView = 'image' | 'video' | 'civitai' | 'openwebui'
 
@@ -21,6 +22,7 @@ const ITEMS: { id: UretView; label: string; icon: string }[] = [
 // open/close slide can animate; a backdrop tap or Escape closes it, picking
 // an item closes it via onSelect -> App.goToUret.
 export function UretDrawer({ open, current, onSelect, onClose }: Props) {
+  useBackHandler(open, onClose)
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {

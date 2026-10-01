@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useBackHandler } from '../native/backButton'
 
 interface Props {
   children: ReactNode
@@ -10,6 +11,7 @@ interface Props {
 // and the tabs' display:none wrappers can't clip or hide the overlay.
 export function HelpTip({ children }: Props) {
   const [open, setOpen] = useState(false)
+  useBackHandler(open, () => setOpen(false))
   return (
     <>
       <button

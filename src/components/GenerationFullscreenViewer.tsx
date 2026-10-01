@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useSwipe } from '../hooks/useSwipe'
+import { useBackHandler } from '../native/backButton'
 
 export interface ViewerItem {
   url: string
@@ -28,6 +29,7 @@ export function GenerationFullscreenViewer({ items, index, onIndexChange, onClos
     () => hasNext && onIndexChange(index + 1),
     () => hasPrev && onIndexChange(index - 1),
   )
+  useBackHandler(!!item, onClose)
 
   useEffect(() => {
     if (!item) return

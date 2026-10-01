@@ -11,6 +11,7 @@ import type { ImageGenerationSettings } from '../workflow/imageFieldMap'
 import type { Krea2GenerationSettings } from '../workflow/krea2FieldMap'
 import { FullscreenViewer } from './FullscreenViewer'
 import { HelpTip } from './HelpTip'
+import { useBackHandler } from '../native/backButton'
 import { MetadataModal } from './MetadataModal'
 
 const PAGE_SIZE = 60
@@ -48,6 +49,9 @@ interface MetadataState {
 }
 
 interface Props {
+  // Whether Galeri is the visible tab — the Android back button only goes up
+  // a folder while it is.
+  active: boolean
   onSendToCreate: (payload: ImportPayload) => void
 }
 
@@ -68,7 +72,7 @@ function folderLabel(fullPath: string): string {
   return fullPath.slice(fullPath.lastIndexOf('/') + 1)
 }
 
-export function Gallery({ onSendToCreate }: Props) {
+export function Gallery({ active, onSendToCreate }: Props) {
   const { sources, loading: sourcesLoading } = useOutputSources()
   // 'video' first/default — matches the tab order (Video, Krea, SDXL) and
   // this app's own "video generation" starting point. The effect below
@@ -267,6 +271,8 @@ export function Gallery({ onSendToCreate }: Props) {
       setSendingAction(null)
     }
   }
+
+  useBackHandler(active && currentPath !== '', goUp)
 
   const visibleFiles = items.slice(0, visibleCount)
 
