@@ -1,0 +1,27 @@
+apply plugin: 'com.android.application'
+
+// "MiniMax Uyandırıcı" — a separate little app for an always-on spare phone
+// at home. It listens on the LAN/Tailscale for a "wake" request from the main
+// app's offline page and sends the PC a Wake-on-LAN packet from inside the
+// house (a phone away from home can't reach the LAN broadcast itself).
+// Plain framework Android, no androidx — nothing here needs it.
+android {
+    namespace = "com.emir.minimaxwaker"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.emir.minimaxwaker"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

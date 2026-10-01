@@ -1,4 +1,6 @@
 include ':app'
+// Separate always-on Wake-on-LAN relay app for a spare phone at home.
+include ':waker'
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 

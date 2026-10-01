@@ -179,8 +179,8 @@ export function SettingsTab({ active }: Props) {
           ⏻ Bilgisayar
           <HelpTip>
             <b>Uyut:</b> bilgisayar uykuya geçer; ComfyUI ve yüklü modeller olduğu gibi kalır, birkaç saniyede geri gelir. Uyandırmak
-            için uygulamayı aç — bilgisayara ulaşamayınca çıkan ekrandaki "Bilgisayarı uyandır" düğmesi Wake-on-LAN paketi gönderir
-            (telefon evdeki Wi-Fi'ye bağlıyken). ComfyUI'de iş varken uyutmaz.
+            için uygulamayı aç — bilgisayara ulaşamayınca çıkan ekrandaki "Bilgisayarı uyandır" düğmesi evdeki uyandırıcı telefona
+            haber verir (Tailscale açıkken her yerden çalışır). ComfyUI'de iş varken uyutmaz.
             <br />
             <br />
             <b>Kapat:</b> her şeyi kapatır — ComfyUI, bu panel ve llama-swap dahil.

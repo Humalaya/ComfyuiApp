@@ -5,11 +5,12 @@
 const API_BASE = '/comfy-api'
 const WS_BASE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/comfy-ws`
 
-// Direct (non-proxied) ComfyUI address — the browser normally never needs
-// this (everything goes through the /comfy-api proxy above to dodge CORS),
-// but the native Android KeepAlive service polls ComfyUI directly from Java
-// while the WebView is backgrounded, so it needs the real address.
-export const COMFY_BASE_URL: string = import.meta.env.VITE_COMFYUI_URL || 'http://192.168.1.62:8188'
+// ComfyUI as seen from the phone, for the native Android KeepAlive service
+// that polls /history from Java while the WebView is backgrounded. It goes
+// through this same dev-server proxy rather than ComfyUI's own address:
+// the phone may be reaching the PC over Tailscale from outside the house,
+// where ComfyUI's LAN address isn't reachable but this origin is.
+export const COMFY_BASE_URL = `${location.origin}${API_BASE}`
 
 export interface QueuePromptResponse {
   prompt_id: string

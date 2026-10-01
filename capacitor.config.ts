@@ -4,9 +4,14 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // mobile browser) in a native Android shell — it does not bundle a static
 // build of its own. That means editing the React app and refreshing behaves
 // exactly like today; there's no separate "app build" step to keep in sync,
-// only the one-time APK build below. If your PC's LAN IP changes, update it
-// here and rebuild the APK.
-const DEV_SERVER_URL = 'http://192.168.1.62:5173';
+// only the one-time APK build below.
+//
+// The PC's Tailscale address, not its LAN one: the same app then works at
+// home and away (Tailscale must be on on the phone). At home Tailscale
+// still connects directly over the LAN, so nothing is slower. If the PC's
+// Tailscale IP changes (`tailscale ip -4`), update it here, in
+// public/offline.html, and rebuild the APK.
+const DEV_SERVER_URL = 'http://100.78.9.7:5173';
 
 const config: CapacitorConfig = {
   appId: 'com.emir.minimaxcontrol',
