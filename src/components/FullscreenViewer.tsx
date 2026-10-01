@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { outputFileUrl, outputMimeType, type OutputFile } from '../api/outputsClient'
+import { useSwipe } from '../hooks/useSwipe'
 import { canSaveMediaNatively, copyMediaToClipboard, saveMediaToDevice, shareMediaFromDevice } from '../native/saveMedia'
 
 interface Props {
@@ -54,6 +55,13 @@ export function FullscreenViewer({ source, item, hasPrev, hasNext, onPrev, onNex
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [item, onClose, onPrev, onNext])
+
+  // Swipe left/right for next/previous — same gesture the generation-result
+  // viewer already had; must run before the early return (hook order).
+  const swipe = useSwipe(
+    () => hasNext && onNext(),
+    () => hasPrev && onPrev(),
+  )
 
   if (!item) return null
 
@@ -112,7 +120,7 @@ export function FullscreenViewer({ source, item, hasPrev, hasNext, onPrev, onNex
 
   return (
     <div className="popup-overlay" onClick={onClose}>
-      <div className="popup-content" onClick={(e) => e.stopPropagation()}>
+      <div className="popup-content" onClick={(e) => e.stopPropagation()} {...swipe}>
         <button type="button" className="popup-close" onClick={onClose} aria-label="Kapat">
           ✕
         </button>

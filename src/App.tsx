@@ -13,6 +13,10 @@ import { Krea2GenerateTab } from './components/Krea2GenerateTab'
 import { SettingsTab } from './components/SettingsTab'
 import { UretDrawer, type UretView } from './components/UretDrawer'
 import { OpenWebUiFrame } from './components/OpenWebUiFrame'
+import { CivitaiBrowser } from './components/CivitaiBrowser'
+import { HelpTip } from './components/HelpTip'
+import { randomSeed, SeedField } from './components/SeedField'
+import { modelLabel } from './utils/modelLabel'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
 import { getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
@@ -64,13 +68,16 @@ interface CompletedItem {
 // long-press slides open a drawer to switch between them (see UretDrawer).
 // Galeri and Ayarlar (the gear) are ordinary tabs.
 type Tab = 'uret' | 'gallery' | 'settings'
-// UretView ('image' | 'video' | 'openwebui') — the sub-views behind "Üret";
-// defined with the drawer that switches between them. 'openwebui' is the
-// OpenWebUI instance on this same PC (:3000), embedded as an iframe.
+// UretView ('image' | 'video' | 'civitai' | 'openwebui') — the sub-views
+// behind "Üret"; defined with the drawer that switches between them.
+// 'civitai' browses Civitai's image/video feed (CivitaiBrowser.tsx);
+// 'openwebui' is the OpenWebUI instance on this same PC (:3000), embedded
+// as an iframe.
 
 const URET_VIEW_LABEL: Record<UretView, string> = {
   image: 'Görsel',
   video: 'Video',
+  civitai: 'Civitai',
   openwebui: 'OpenWebUI',
 }
 
@@ -80,7 +87,7 @@ const URET_VIEW_KEY = 'mobile-control:uret-view'
 function loadUretView(): UretView {
   try {
     const v = localStorage.getItem(URET_VIEW_KEY)
-    if (v === 'image' || v === 'video' || v === 'openwebui') return v
+    if (v === 'image' || v === 'video' || v === 'civitai' || v === 'openwebui') return v
   } catch {
     /* private mode / unavailable — fall through to the default */
   }
@@ -94,10 +101,6 @@ function saveUretView(v: UretView): void {
   }
 }
 
-function randomSeed() {
-  return Math.floor(Math.random() * 1_000_000_000_000)
-}
-
 export default function App() {
   const [tab, setTab] = useState<Tab>('uret')
   const [uretView, setUretView] = useState<UretView>(loadUretView)
@@ -107,6 +110,9 @@ export default function App() {
   // whole chat UI / drop its session. No reason to load a second web app on
   // startup for someone who never touches that view.
   const [openWebUiVisited, setOpenWebUiVisited] = useState(() => loadUretView() === 'openwebui')
+  // Same lazy-mount-then-keep idea for the Civitai browser — no reason to hit
+  // Civitai's API on every app start for someone who never opens it.
+  const [civitaiVisited, setCivitaiVisited] = useState(() => loadUretView() === 'civitai')
   const [imageModel, setImageModel] = useState<'sdxl' | 'krea2'>('sdxl')
   // See PendingImport above — null means "nothing pending", each tab only
   // reacts when `id` actually changes.
@@ -197,6 +203,7 @@ export default function App() {
   function goToUret(view: UretView) {
     setUretView(view)
     if (view === 'openwebui') setOpenWebUiVisited(true)
+    if (view === 'civitai') setCivitaiVisited(true)
     setTab('uret')
     setDrawerOpen(false)
   }
@@ -233,8 +240,8 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false
-    loadRemoteQueue(QUEUE_KIND, normalizeSettings).then((loaded) => {
-      if (cancelled) return
+    loadRemoteQueue(QUEUE_KIND, normalizeSettings, () => cancelled).then((loaded) => {
+      if (cancelled || loaded === null) return
       setQueue(loaded)
       setQueueLoaded(true)
     })
@@ -282,7 +289,31 @@ export default function App() {
   const lastDrainedKey = useRef<string | null>(null)
   useEffect(() => {
     if (!(gen.status === 'done' || gen.status === 'error' || gen.status === 'idle')) return
-    const key = `${gen.status}:${gen.settledCount}`
+    // Wait for the queue's own PC-RAM load to finish before deciding it's
+    // empty — this effect's OWN mount-time recovery (loadRemoteJob, above)
+    // races the queue's (loadRemoteQueue). If the active job's recovery
+    // settles first and finds it already done, `queue` can still be its
+    // initial `[]` at that exact moment — reading queue.length here as "0,
+    // nothing to drain" then would strand every real pending item forever,
+    // since queueLoaded flipping true afterwards was never a dependency this
+    // effect re-ran for. Including it as one now (see the array below) is
+    // what makes that late queue load itself retry this check.
+    if (!queueLoaded) return
+    // Also wait for gen's OWN mount-time job-recovery check to have actually
+    // run (found something or not) before ever trusting an 'idle' status —
+    // 'idle' means EITHER "genuinely nothing running" OR "recovery hasn't
+    // reported back yet", and those look identical from status alone. Acting
+    // on the second one — drain the queue "since nothing's running" — right
+    // before recovery settles its own leftover job to 'done' a moment later
+    // fires this effect a second time too, both moments start a different
+    // queued item, and the two generate() calls step on the same shared
+    // activePromptId/tickInterval/pollInterval refs. Whichever loses that
+    // race never gets its submission tracked — its job can genuinely reach
+    // ComfyUI with nothing here left watching for it, which is what let
+    // queued items disappear after a background process kill without ever
+    // finishing (or with no record of them finishing).
+    if (!gen.recoveryChecked) return
+    const key = `${gen.status}:${gen.settledCount}:${queueLoaded}`
     if (lastDrainedKey.current === key) return
     lastDrainedKey.current = key
 
@@ -307,7 +338,7 @@ export default function App() {
 
     startNextInQueue()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen.status, gen.settledCount])
+  }, [gen.status, gen.settledCount, queueLoaded, gen.recoveryChecked])
 
   // One retry attempt whenever the app is reopened/foregrounded while the
   // queue is paused — covers exactly the "left it overnight, ComfyUI (or the
@@ -348,6 +379,26 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectInfo.unetNames])
+
+  // Settings sent over from Galeri (a PNG's metadata) or Civitai — routes
+  // each to its own Create tab and switches to it.
+  function handleImport(payload: ImportPayload) {
+    if (payload.kind === 'video') {
+      // fixedSeed is already set to true inside pngImport.ts whenever
+      // a seed was actually recognized, so this merge doesn't need to
+      // special-case it.
+      setSettings((s) => ({ ...s, ...payload.settings }))
+      goToUret('video')
+    } else if (payload.kind === 'sdxl') {
+      setImageImportRequest({ settings: payload.settings, id: Date.now() })
+      setImageModel('sdxl')
+      goToUret('image')
+    } else {
+      setKrea2ImportRequest({ settings: payload.settings, id: Date.now() })
+      setImageModel('krea2')
+      goToUret('image')
+    }
+  }
 
   function update<K extends keyof GenerationSettings>(key: K, value: GenerationSettings[K]) {
     setSettings((s) => ({ ...s, [key]: value }))
@@ -417,7 +468,7 @@ export default function App() {
             onPointerCancel={endUretPress}
             onContextMenu={(e) => e.preventDefault()}
             aria-haspopup="menu"
-            title="Uzun bas: Görsel / Video / OpenWebUI"
+            title="Uzun bas: Görsel / Video / Civitai / OpenWebUI"
           >
             {URET_VIEW_LABEL[uretView]}
             <span className="tab-caret" aria-hidden="true"> ▾</span>
@@ -443,11 +494,11 @@ export default function App() {
           state away; the same would happen to in-progress generations on
           either generate tab. */}
       <div style={{ display: tab === 'uret' && uretView === 'image' ? 'block' : 'none' }}>
-        <div className="tabs image-model-tabs">
-          <button className={imageModel === 'sdxl' ? 'tab tab-active' : 'tab'} onClick={() => setImageModel('sdxl')}>
+        <div className="seg seg-accent uret-model-seg">
+          <button type="button" className={imageModel === 'sdxl' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setImageModel('sdxl')}>
             SDXL
           </button>
-          <button className={imageModel === 'krea2' ? 'tab tab-active' : 'tab'} onClick={() => setImageModel('krea2')}>
+          <button type="button" className={imageModel === 'krea2' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setImageModel('krea2')}>
             Krea2 (FLUX)
           </button>
         </div>
@@ -467,23 +518,7 @@ export default function App() {
 
       <div style={{ display: tab === 'gallery' ? 'block' : 'none' }}>
         <Gallery
-          onSendToCreate={(payload: ImportPayload) => {
-            if (payload.kind === 'video') {
-              // fixedSeed is already set to true inside pngImport.ts whenever
-              // a seed was actually recognized, so this merge doesn't need to
-              // special-case it.
-              setSettings((s) => ({ ...s, ...payload.settings }))
-              goToUret('video')
-            } else if (payload.kind === 'sdxl') {
-              setImageImportRequest({ settings: payload.settings, id: Date.now() })
-              setImageModel('sdxl')
-              goToUret('image')
-            } else {
-              setKrea2ImportRequest({ settings: payload.settings, id: Date.now() })
-              setImageModel('krea2')
-              goToUret('image')
-            }
-          }}
+          onSendToCreate={handleImport}
         />
       </div>
 
@@ -539,16 +574,16 @@ export default function App() {
 
         <div className="picture-frame-row">
           <ImageUploader
-            label="Picture 1 (Başlangıç Karesi)"
-            hint="Kapalı — düz metinden video üretilir (txt2vid)."
+            label="İlk kare"
+            help="Picture 1 — videonun başlangıç karesi. Kapalıyken video düz metinden üretilir (txt2vid). Kapatmak seçili görseli silmez."
             enabled={settings.inputImageEnabled}
             onToggleEnabled={(enabled) => update('inputImageEnabled', enabled)}
             value={settings.inputImage}
             onChange={(img) => update('inputImage', img)}
           />
           <ImageUploader
-            label="Picture 2 (Bitiş Karesi)"
-            hint="Kapalı — video Picture 1'den (ya da düz metinden) normal şekilde üretilir."
+            label="Son kare"
+            help="Picture 2 — videonun bitiş karesi. Açıkken video ilk kareden bu kareye doğru ilerler. Kapalıyken video ilk kareden (ya da düz metinden) normal şekilde üretilir."
             enabled={settings.lastFrameEnabled}
             onToggleEnabled={(enabled) => update('lastFrameEnabled', enabled)}
             value={settings.lastFrameImage}
@@ -592,25 +627,12 @@ export default function App() {
           </div>
         </div>
 
-        <div className="field">
-          <label className="field-label">Seed</label>
-          <div className="seed-row">
-            <NumberField value={settings.seed} onChange={(v) => update('seed', v)} />
-            <button type="button" className="secondary-button" onClick={() => update('seed', randomSeed())}>
-              🎲 Rastgele
-            </button>
-            <button
-              type="button"
-              className={settings.fixedSeed ? 'switch switch-on seed-fixed-switch' : 'switch seed-fixed-switch'}
-              aria-pressed={settings.fixedSeed}
-              onClick={() => update('fixedSeed', !settings.fixedSeed)}
-              aria-label="Seed'i sabitle"
-            >
-              <span className="switch-knob" />
-            </button>
-          </div>
-          <span className="field-hint">{settings.fixedSeed ? 'Sabit — her üretimde aynı seed kullanılır' : 'Rastgele — her üretimde yeni bir seed seçilir'}</span>
-        </div>
+        <SeedField
+          seed={settings.seed}
+          fixed={settings.fixedSeed}
+          onSeedChange={(v) => update('seed', v)}
+          onFixedChange={(v) => update('fixedSeed', v)}
+        />
 
         <div className="field">
           <label className="field-label">Model</label>
@@ -620,7 +642,7 @@ export default function App() {
             )}
             {objectInfo.unetNames.map((name) => (
               <option key={name} value={name}>
-                {name}
+                {modelLabel(name)}
               </option>
             ))}
           </select>
@@ -629,13 +651,17 @@ export default function App() {
         <LoraList
           loras={settings.loras}
           loraNames={objectInfo.loraNames}
+          tab="video"
           onChange={updateLora}
           onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
         />
 
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Megapiksel</label>
+            <label className="field-label">
+              Megapiksel
+              <HelpTip>Videonun çözünürlüğü — seçilen en-boy oranında toplam piksel sayısı (milyon). Yükseldikçe kalite de üretim süresi de artar.</HelpTip>
+            </label>
             <NumberField min={0.1} max={4} step={0.1} value={settings.megapixels} onChange={(v) => update('megapixels', v)} />
           </div>
           <div className="field">
@@ -645,13 +671,14 @@ export default function App() {
         </div>
 
         <div className="field">
-          <label className="field-label">Batch Count (arka arkaya üretilecek video sayısı)</label>
+          <label className="field-label">
+            Batch Count
+            <HelpTip>
+              Arka arkaya üretilecek video sayısı. Video modelinin gerçek batch desteği yok — her video ayrı bir iş olarak kuyruğa
+              eklenir, Sabit kapalıysa her birine yeni seed seçilir.
+            </HelpTip>
+          </label>
           <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
-          {settings.batchCount > 1 && (
-            <span className="field-hint">
-              Video modelinin gerçek batch desteği yok — {settings.batchCount} ayrı iş art arda kuyruğa eklenecek.
-            </span>
-          )}
         </div>
 
         <CollapsibleSection title="Gelişmiş Ayarlar">
@@ -686,9 +713,13 @@ export default function App() {
         {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
         <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
-          {isBusy ? '+ Kuyruğa Ekle' : 'Oluştur'}
+          {isBusy ? '+ Kuyruğa Ekle' : settings.batchCount > 1 ? `Oluştur · ${settings.batchCount}` : 'Oluştur'}
         </button>
       </main>
+
+      <div style={{ display: tab === 'uret' && uretView === 'civitai' ? 'block' : 'none' }}>
+        {civitaiVisited && <CivitaiBrowser onSendToCreate={handleImport} />}
+      </div>
 
       <div style={{ display: tab === 'uret' && uretView === 'openwebui' ? 'block' : 'none' }}>
         {openWebUiVisited && <OpenWebUiFrame />}

@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
+import { useSwipe } from '../hooks/useSwipe'
 
 export interface ViewerItem {
   url: string
@@ -23,8 +24,10 @@ export function GenerationFullscreenViewer({ items, index, onIndexChange, onClos
   const item = items[index] ?? null
   const hasPrev = index > 0
   const hasNext = index < items.length - 1
-  const touchStartX = useRef<number | null>(null)
-  const touchStartY = useRef<number | null>(null)
+  const swipe = useSwipe(
+    () => hasNext && onIndexChange(index + 1),
+    () => hasPrev && onIndexChange(index - 1),
+  )
 
   useEffect(() => {
     if (!item) return
@@ -39,25 +42,9 @@ export function GenerationFullscreenViewer({ items, index, onIndexChange, onClos
 
   if (!item) return null
 
-  function onTouchStart(e: React.TouchEvent) {
-    touchStartX.current = e.touches[0].clientX
-    touchStartY.current = e.touches[0].clientY
-  }
-
-  function onTouchEnd(e: React.TouchEvent) {
-    if (touchStartX.current === null) return
-    const dx = e.changedTouches[0].clientX - touchStartX.current
-    const dy = e.changedTouches[0].clientY - (touchStartY.current ?? 0)
-    touchStartX.current = null
-    touchStartY.current = null
-    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return
-    if (dx < 0 && hasNext) onIndexChange(index + 1)
-    else if (dx > 0 && hasPrev) onIndexChange(index - 1)
-  }
-
   return (
     <div className="popup-overlay" onClick={onClose}>
-      <div className="popup-content" onClick={(e) => e.stopPropagation()} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <div className="popup-content" onClick={(e) => e.stopPropagation()} {...swipe}>
         <button type="button" className="popup-close" onClick={onClose} aria-label="Kapat">
           ✕
         </button>

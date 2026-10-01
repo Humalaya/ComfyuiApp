@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
+import { HelpTip } from './HelpTip'
 import {
   fetchStartAllStatus,
   fetchSwapModels,
   loadSwapModel,
   shutdownMachine,
+  suspendMachine,
   startStack,
   stopStack,
   unloadSwapModel,
@@ -30,9 +32,11 @@ export function SettingsTab({ active }: Props) {
   const [stackError, setStackError] = useState<string | null>(null)
   const [stackBusy, setStackBusy] = useState(false)
 
-  // Two-step so a stray tap can't power the box off — first press only arms it.
-  const [shutdownArmed, setShutdownArmed] = useState(false)
-  const [shuttingDown, setShuttingDown] = useState(false)
+  // Two-step so a stray tap can't put the box to sleep or power it off —
+  // the first press only arms that action.
+  const [powerArmed, setPowerArmed] = useState<'suspend' | 'shutdown' | null>(null)
+  const [powerBusy, setPowerBusy] = useState(false)
+  const [powerError, setPowerError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -57,10 +61,10 @@ export function SettingsTab({ active }: Props) {
     return () => clearInterval(t)
   }, [active, refresh])
 
-  // Leaving the tab disarms the shutdown confirm — coming back to a
-  // pre-armed "Evet, kapat" button would be a nasty surprise.
+  // Leaving the tab disarms the confirm — coming back to a pre-armed
+  // "Evet" button would be a nasty surprise.
   useEffect(() => {
-    if (!active) setShutdownArmed(false)
+    if (!active) setPowerArmed(null)
   }, [active])
 
   async function toggleModel(m: SwapModel) {
@@ -88,15 +92,16 @@ export function SettingsTab({ active }: Props) {
     }
   }
 
-  async function doShutdown() {
-    setShuttingDown(true)
+  async function doPower(action: 'suspend' | 'shutdown') {
+    setPowerBusy(true)
+    setPowerError(null)
     try {
-      await shutdownMachine()
-      // No refresh — the machine (and this server) is on its way down.
+      await (action === 'suspend' ? suspendMachine() : shutdownMachine())
+      // No refresh — the machine (and this server) is going away.
     } catch (e) {
-      setStackError((e as Error).message)
-      setShuttingDown(false)
-      setShutdownArmed(false)
+      setPowerError((e as Error).message)
+      setPowerBusy(false)
+      setPowerArmed(null)
     }
   }
 
@@ -169,23 +174,49 @@ export function SettingsTab({ active }: Props) {
         </span>
       </section>
 
-      <section className="settings-section settings-section-danger">
-        <div className="settings-section-title">⏻ Bilgisayar</div>
-        {!shutdownArmed ? (
-          <button type="button" className="secondary-button danger-button" onClick={() => setShutdownArmed(true)}>
-            Bilgisayarı Kapat
-          </button>
+      <section className="settings-section">
+        <div className="settings-section-title">
+          ⏻ Bilgisayar
+          <HelpTip>
+            <b>Uyut:</b> bilgisayar uykuya geçer; ComfyUI ve yüklü modeller olduğu gibi kalır, birkaç saniyede geri gelir. Uyandırmak
+            için uygulamayı aç — bilgisayara ulaşamayınca çıkan ekrandaki "Bilgisayarı uyandır" düğmesi Wake-on-LAN paketi gönderir
+            (telefon evdeki Wi-Fi'ye bağlıyken). ComfyUI'de iş varken uyutmaz.
+            <br />
+            <br />
+            <b>Kapat:</b> her şeyi kapatır — ComfyUI, bu panel ve llama-swap dahil.
+          </HelpTip>
+        </div>
+        {powerError && <div className="field-error">{powerError}</div>}
+        {powerArmed === null ? (
+          <div className="settings-actions">
+            <button type="button" className="secondary-button" onClick={() => setPowerArmed('suspend')}>
+              ☾ Uyut
+            </button>
+            <button type="button" className="secondary-button danger-button" onClick={() => setPowerArmed('shutdown')}>
+              ⏻ Kapat
+            </button>
+          </div>
         ) : (
           <div className="settings-actions">
-            <button type="button" className="secondary-button danger-button" disabled={shuttingDown} onClick={doShutdown}>
-              {shuttingDown ? 'Kapatılıyor…' : 'Evet, şimdi kapat'}
+            <button
+              type="button"
+              className={powerArmed === 'shutdown' ? 'secondary-button danger-button' : 'secondary-button'}
+              disabled={powerBusy}
+              onClick={() => doPower(powerArmed)}
+            >
+              {powerBusy
+                ? powerArmed === 'suspend'
+                  ? 'Uyutuluyor…'
+                  : 'Kapatılıyor…'
+                : powerArmed === 'suspend'
+                  ? 'Evet, uyut'
+                  : 'Evet, kapat'}
             </button>
-            <button type="button" className="secondary-button" disabled={shuttingDown} onClick={() => setShutdownArmed(false)}>
+            <button type="button" className="secondary-button" disabled={powerBusy} onClick={() => setPowerArmed(null)}>
               Vazgeç
             </button>
           </div>
         )}
-        <span className="field-hint">Tüm bilgisayarı kapatır — ComfyUI, bu panel ve llama-swap dahil her şey durur.</span>
       </section>
     </div>
   )

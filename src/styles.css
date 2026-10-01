@@ -72,24 +72,10 @@ body {
   border-color: var(--accent);
 }
 
-.image-model-tabs {
-  margin-bottom: 14px;
-}
-
-.image-model-tabs .tab {
-  padding: 8px;
-  font-size: 0.85rem;
-}
-
-.quality-preset-tabs .tab {
-  padding: 8px;
-  font-size: 0.85rem;
-}
-
 .form {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   padding-top: 12px;
 }
 
@@ -101,7 +87,7 @@ body {
 
 .field-row {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 .field-row .field {
@@ -109,7 +95,13 @@ body {
 }
 
 .field-label {
-  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Same height with or without a help "?" — keeps paired fields' inputs
+     level in a .field-row. */
+  min-height: 18px;
+  font-size: 0.78rem;
   color: var(--text-dim);
   font-weight: 500;
 }
@@ -122,13 +114,25 @@ body {
 input,
 select,
 textarea {
-  font-size: 1rem;
-  padding: 12px;
+  font-size: 0.95rem;
+  padding: 11px 12px;
   border-radius: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   background: var(--surface);
   color: var(--text);
   width: 100%;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
+/* Long model paths overflow a phone-width select — cut, don't wrap. */
+select {
+  text-overflow: ellipsis;
 }
 
 input:disabled,
@@ -155,7 +159,7 @@ input[type='range'] {
 
 .seed-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .seed-row input {
@@ -168,9 +172,9 @@ input[type='range'] {
 }
 
 .secondary-button {
-  padding: 12px 16px;
+  padding: 11px 16px;
   border-radius: 10px;
-  border: 1px solid var(--border);
+  border: none;
   background: var(--surface-2);
   color: var(--text);
   font-size: 0.95rem;
@@ -184,7 +188,6 @@ input[type='range'] {
   padding: 12px 14px;
   background: var(--surface);
   border-radius: 12px;
-  border: 1px solid var(--border);
 }
 
 .queue-title {
@@ -218,8 +221,8 @@ input[type='range'] {
 }
 
 .generate-button {
-  padding: 18px;
-  border-radius: 14px;
+  padding: 16px;
+  border-radius: 12px;
   border: none;
   background: var(--accent);
   color: white;
@@ -240,8 +243,8 @@ input[type='range'] {
 
 .image-uploader {
   aspect-ratio: 4 / 5;
-  border-radius: 14px;
-  border: 2px dashed var(--border);
+  border-radius: 12px;
+  border: 1px dashed var(--border);
   background: var(--surface);
   display: flex;
   align-items: center;
@@ -267,10 +270,10 @@ input[type='range'] {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 12px;
   border-radius: 10px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   color: var(--text);
   text-align: left;
 }
@@ -280,10 +283,15 @@ input[type='range'] {
   font-weight: 500;
 }
 
+/* The enabled LoRAs' names (see LoraList.tsx) — one line, cut off. */
 .lora-list-toggle-summary {
   flex: 1;
+  min-width: 0;
   color: var(--text-dim);
   font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lora-list-toggle-chevron {
@@ -306,10 +314,10 @@ input[type='range'] {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 12px;
   border-radius: 10px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   color: var(--text);
   text-align: left;
 }
@@ -353,38 +361,6 @@ input[type='range'] {
   gap: 8px;
 }
 
-.lora-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-  margin-top: 10px;
-  /* The whole grid is at most as wide as its parent field — without this,
-     a track can be sized past the viewport by a child's intrinsic content
-     (see .lora-card) and push the page into horizontal scroll. */
-  max-width: 100%;
-}
-
-.lora-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  border-radius: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  opacity: 0.6;
-  /* A grid item's automatic minimum width defaults to its content's
-     min-content size, and a nowrap label's min-content IS its full,
-     untruncated width — without this, a long LoRA filename silently
-     forces this card (and the whole page) wider than its 1fr track. */
-  min-width: 0;
-}
-
-.lora-card-on {
-  opacity: 1;
-  border-color: var(--accent-dim);
-}
-
 .switch {
   flex-shrink: 0;
   width: 44px;
@@ -416,63 +392,6 @@ input[type='range'] {
   transform: translateX(18px);
 }
 
-.lora-name,
-.lora-select {
-  width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.78rem;
-}
-
-.lora-select {
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  text-align: left;
-}
-
-.lora-select-label {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A fixed square so every card lines up the same whether or not its LoRA
-   has a preview image — tapping it toggles the slot on/off directly. */
-.lora-thumb {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  padding: 0;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.lora-thumb:disabled {
-  opacity: 0.5;
-}
-
-.lora-thumb-on {
-  border-color: var(--accent);
-  border-width: 2px;
-}
-
-.lora-thumb-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
 /* Civitai fallback (see LoraList.tsx) — only shown once a lookup actually
    returned trainedWords for a slot's lora. */
 .lora-trigger-words {
@@ -495,20 +414,6 @@ input[type='range'] {
 
 .lora-civitai-button:disabled {
   opacity: 0.6;
-}
-
-/* "→ Prompta Gönder" — appends this slot's Civitai trigger words to the
-   prompt (see promptText.ts). Accent-colored (unlike the neutral
-   .lora-civitai-button above it) since this one directly changes the
-   prompt, not just fetches info. */
-.lora-trigger-send-button {
-  width: 100%;
-  padding: 5px;
-  border-radius: 6px;
-  border: 1px solid var(--accent-dim);
-  background: transparent;
-  color: var(--accent);
-  font-size: 0.72rem;
 }
 
 .lora-weight-row {
@@ -540,7 +445,7 @@ input[type='range'] {
   padding: 14px;
   border-radius: 12px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
 }
 
 .status-label {
@@ -717,24 +622,18 @@ input[type='range'] {
 
 .gallery-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
 }
 
+/* Image-only tiles like the Civitai grid — time/size ride on a gradient
+   over the bottom edge instead of a text block under every thumbnail. */
 .gallery-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid var(--border);
-}
-
-.gallery-thumb-wrap {
   position: relative;
   aspect-ratio: 1 / 1;
-  background: black;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
 }
 
 .gallery-thumb {
@@ -750,71 +649,68 @@ input[type='range'] {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.6rem;
-  color: var(--text-dim);
   background: var(--surface-2);
 }
 
-.gallery-meta {
+.gallery-play {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 18px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: white;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gallery-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 0 8px;
+  padding: 14px 6px 4px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  color: white;
+  pointer-events: none;
 }
 
 .gallery-name {
-  font-size: 0.78rem;
+  font-size: 0.7rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .gallery-sub {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-}
-
-.gallery-actions {
-  display: flex;
-  gap: 6px;
-  margin: 0 8px 8px;
+  font-size: 0.64rem;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .gallery-metadata-button {
-  flex: 1;
-  padding: 8px;
-  border-radius: 8px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
   border: none;
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 0.78rem;
-}
-
-.source-tabs {
-  display: flex;
-  gap: 8px;
-}
-
-.source-tab {
-  flex: 1;
-  padding: 10px;
-  font-size: 0.9rem;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-dim);
-}
-
-.source-tab-active {
-  background: var(--accent-dim);
+  background: rgba(0, 0, 0, 0.55);
   color: white;
-  border-color: var(--accent);
+  font-size: 0.8rem;
 }
 
-.breadcrumb {
+.gallery-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   position: sticky;
   top: var(--header-height, 90px);
   z-index: 5;
@@ -823,33 +719,60 @@ input[type='range'] {
   margin: -6px 0;
 }
 
-.breadcrumb-path {
-  font-size: 0.85rem;
-  color: var(--text-dim);
+.gallery-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.folder-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.gallery-count {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.gallery-toolbar .help-tip {
+  width: 24px;
+  height: 24px;
+  font-size: 0.78rem;
+}
+
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .folder-tile {
-  text-align: left;
-  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px;
   border-radius: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   background: var(--surface);
   color: var(--text);
-  font-size: 0.95rem;
+  text-align: left;
+}
+
+.folder-tile-icon {
+  font-size: 1.1rem;
+}
+
+.folder-tile-name {
+  max-width: 100%;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .folder-tile-recent {
   border-color: var(--success);
-  box-shadow: inset 0 0 0 1px var(--success);
 }
 
 .empty-state {
@@ -1086,59 +1009,6 @@ input[type='range'] {
   flex: 1;
 }
 
-.lora-picker-list {
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.lora-picker-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: none;
-  color: var(--text);
-  font-size: 0.88rem;
-}
-
-.lora-picker-item-active {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-  color: white;
-}
-
-.lora-picker-item-thumb {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--surface-2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.lora-picker-item-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.lora-picker-item-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* --- Ayarlar (Settings) tab ------------------------------------------- */
 
 /* Four tabs instead of three — tighten the top nav so the labels still fit
@@ -1159,13 +1029,12 @@ input[type='range'] {
 }
 
 .settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-dim);
-}
-
-.settings-section-danger .settings-section-title {
-  color: var(--danger);
 }
 
 .settings-row {
@@ -1345,4 +1214,793 @@ input[type='range'] {
   color: white;
   font-size: 0.75rem;
   text-decoration: none;
+}
+
+/* --- Danbooru tag rehberi (SDXL, see TagCheatSheet.tsx) --- */
+
+.tag-sheet-search {
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+.tag-sheet-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  /* A long category (Kıyafet, Vücut…) shouldn't push the rest of the form
+     a whole screen down — scroll inside the box instead. */
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.tag-chip {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.tag-chip-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: white;
+}
+
+.tag-chip-negative {
+  border-style: dashed;
+  color: var(--text-dim);
+}
+
+.tag-chip-negative-active {
+  background: rgba(255, 92, 92, 0.18);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.tag-chip-count {
+  margin-left: 5px;
+  font-size: 0.68rem;
+  opacity: 0.55;
+}
+
+/* --- LoRA list: one compact row per used slot (see LoraList.tsx) --- */
+
+.lora-list-toggle-count {
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+
+.lora-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lora-row {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.lora-row-open {
+  border-color: var(--accent-dim);
+}
+
+.lora-row-off .lora-row-body {
+  opacity: 0.45;
+}
+
+.lora-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 6px;
+}
+
+.lora-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.lora-row-thumb {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.lora-row-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lora-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lora-row-name {
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lora-row-folder {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.lora-row-strength {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.lora-row-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.lora-row-fullname {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  word-break: break-all;
+  padding-top: 6px;
+}
+
+.lora-trigger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lora-trigger-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-dim);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 0.78rem;
+}
+
+.lora-trigger-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.lora-trigger-item-send {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.lora-row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.lora-row-actions .lora-civitai-button {
+  flex: 1;
+}
+
+.lora-remove-button {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  font-size: 0.72rem;
+}
+
+.lora-add-button {
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--accent-dim);
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.lora-add-button:disabled {
+  opacity: 0.5;
+}
+
+/* --- LoRA picker: multi-select thumbnail grid (see LoraPicker.tsx) --- */
+
+.lora-picker {
+  max-height: min(88dvh, 760px);
+}
+
+.lora-picker-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-content: start;
+}
+
+.lora-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  min-width: 0;
+}
+
+.lora-tile:disabled {
+  cursor: default;
+}
+
+.lora-tile-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 2px solid transparent;
+}
+
+.lora-tile-selected .lora-tile-thumb {
+  border-color: var(--accent);
+}
+
+.lora-tile-added .lora-tile-thumb,
+.lora-tile:disabled:not(.lora-tile-added):not(.lora-tile-selected) .lora-tile-thumb {
+  opacity: 0.4;
+}
+
+.lora-tile-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lora-tile-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.7rem;
+}
+
+.lora-tile-added .lora-tile-check {
+  background: var(--surface);
+  color: var(--text-dim);
+}
+
+.lora-tile-name {
+  font-size: 0.72rem;
+  line-height: 1.25;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.lora-picker-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lora-picker-footer .generate-button {
+  padding: 12px;
+  font-size: 1rem;
+}
+
+/* --- Civitai image/video browser (see CivitaiBrowser.tsx) --- */
+
+.civitai-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.civitai-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.civitai-toolbar .seg {
+  flex: 1;
+}
+
+.civitai-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.civitai-tile {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.civitai-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.civitai-tile-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: white;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.civitai-tile-stats {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 8px 5px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+  color: white;
+  font-size: 0.72rem;
+  text-align: left;
+}
+
+/* Viewer: media on top, scrollable info below — unlike the Galeri viewer,
+   the metadata is the point here, so it gets real space. */
+.civitai-viewer-overlay {
+  padding: 0;
+}
+
+.civitai-viewer {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.civitai-viewer .popup-close {
+  top: 10px;
+  right: 10px;
+  /* Dark, not the usual translucent white — this sits over the image
+     itself, and on a bright image the white one all but disappeared. */
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.civitai-viewer-media {
+  position: relative;
+  flex: 0 1 auto;
+  max-height: 62dvh;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: black;
+}
+
+.civitai-viewer-media img,
+.civitai-viewer-media video {
+  max-width: 100%;
+  max-height: 62dvh;
+  display: block;
+}
+
+.civitai-viewer-info {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The panel scrolls — its children must keep their natural height instead
+   of flex-shrinking to fit (the clamped prompt box collapsed to one line
+   under a long LoRA list otherwise). */
+.civitai-viewer-info > * {
+  flex-shrink: 0;
+}
+
+.civitai-viewer-byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.civitai-viewer-user {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.civitai-viewer-base {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(124, 92, 255, 0.15);
+  color: var(--accent);
+  font-size: 0.74rem;
+}
+
+.civitai-prompt {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+/* Clamp lives on the inner text, not the padded button — clamping the
+   button itself let a half-cut 7th line show through its bottom padding. */
+.civitai-prompt-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+}
+
+.civitai-prompt-open .civitai-prompt-text {
+  display: block;
+}
+
+.civitai-section-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.civitai-negative {
+  padding: 0 12px;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+.civitai-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.civitai-detail {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.civitai-detail-key {
+  font-size: 0.66rem;
+  color: var(--text-dim);
+}
+
+.civitai-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.civitai-resource {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.74rem;
+  word-break: break-word;
+}
+
+.civitai-resource-lora {
+  border-color: var(--accent-dim);
+}
+
+.civitai-resource-strength {
+  color: var(--text-dim);
+}
+
+.civitai-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.civitai-actions .generate-button {
+  flex: 1;
+  padding: 12px;
+  font-size: 1rem;
+}
+
+.civitai-open-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  font-size: 1.1rem;
+  text-decoration: none;
+}
+
+.civitai-send-menu .secondary-button {
+  padding: 14px;
+  font-size: 1rem;
+}
+
+/* --- Shared controls (segmented control, chips, toggles, help "?") ---
+   Started life as the Civitai browser's filter bar; the Create tabs and
+   Galeri use the same set so every screen reads the same way. */
+
+.seg {
+  display: flex;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.seg-btn {
+  flex: 1;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.seg-btn-active {
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* Top-level switchers (Görseller/Videolar, SDXL/Krea2, Galeri sources). */
+.seg-accent .seg-btn-active {
+  background: var(--accent);
+  color: white;
+}
+
+.toggle-pill {
+  flex-shrink: 0;
+  padding: 0 12px;
+  min-height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.toggle-pill-on {
+  border-color: var(--accent);
+  background: rgba(124, 92, 255, 0.15);
+  color: var(--text);
+}
+
+.toggle-pill-danger.toggle-pill-on {
+  border-color: var(--danger);
+  background: rgba(255, 92, 92, 0.15);
+}
+
+/* Single-line chip rows that scroll sideways instead of wrapping; bleeds
+   into the page gutter so the scroll doesn't look clipped at the edge. */
+.chip-row {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 -16px;
+  padding: 0 16px;
+}
+
+.chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* Inside a padded popup there's no page gutter to bleed into. */
+.chip-row-flush {
+  margin: 0;
+  padding: 0;
+}
+
+.chip {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.chip-active {
+  border-color: var(--text);
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.icon-button {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1.1rem;
+}
+
+.icon-button:disabled {
+  opacity: 0.6;
+}
+
+.help-tip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.help-overlay {
+  z-index: 200;
+  padding: 24px;
+}
+
+.help-card {
+  max-width: 360px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-row input {
+  flex: 1;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  margin: 8px auto;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner-small {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.more-button {
+  align-self: center;
+  padding: 8px 24px;
+}
+
+.uret-model-seg {
+  margin-top: 12px;
+}
+
+.lora-picker-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

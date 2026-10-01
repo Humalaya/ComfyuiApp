@@ -44,9 +44,8 @@ import { clearRemoteJob, loadRemoteJob, saveRemoteJob } from '../storage/remoteJ
 //
 // It subscribes to the same *shared* ComfyUI socket useComfyGeneration uses
 // (see connectComfySocket's module-level manager in comfyClient.ts) rather
-// than opening a second one — ComfyUI keys its socket registry by the
-// clientId query param, so two independent `new WebSocket(...)` calls under
-// the same id would just steal delivery from one another.
+// than opening a second one — prompts are broadcast to every socket, so a
+// second one would just deliver every message twice.
 //
 // Generic over the settings type and parameterized by buildWorkflow/
 // outputNodeId rather than importing a single fixed workflow module —
@@ -111,6 +110,18 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
   // land on 'error' (not a value *change*), silently stalling the rest of
   // the queue.
   const [settledCount, setSettledCount] = useState(0)
+  // False until the mount-time job-recovery check below has actually run
+  // (whether or not it found anything) — see useComfyGeneration.ts's
+  // identical field for the full rationale. Without this, a caller (each
+  // Create tab's queue-drain effect) can't tell "genuinely idle, nothing was
+  // ever running" apart from "idle because recovery hasn't reported back
+  // yet" from `status` alone, and could start a queued job on a false idle
+  // moments before this hook's own recovery settles a leftover job to
+  // 'done' — two overlapping generate() calls stepping on the same shared
+  // refs, with one of them silently losing track of its own submission
+  // (this is exactly what let queued Krea2/SDXL jobs vanish without ever
+  // reaching ComfyUI after a background process kill).
+  const [recoveryChecked, setRecoveryChecked] = useState(false)
   const settle = useCallback((patch: Partial<ImageGenState>) => {
     setState({ ...initialState, ...patch })
     setSettledCount((c) => c + 1)
@@ -169,7 +180,18 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
       if (msg.type === 'executing' && msg.data.prompt_id === promptId) {
         setState((s) => (s.status === 'running' ? { ...s, currentNodeId: msg.data.node, samplingProgress: null } : s))
       } else if (msg.type === 'progress' && msg.data.prompt_id === promptId) {
-        setState((s) => (s.status === 'running' ? { ...s, samplingProgress: { value: msg.data.value, max: msg.data.max } } : s))
+        // progress also says which node it's for. After the app is reopened
+        // mid-generation, the 'executing' message for the node that's
+        // already running went out before we were listening — so without
+        // this, currentNodeId stayed null, every preview frame got dropped
+        // by the gate below, and the "Adım X / Y" line (which lives inside
+        // the preview) never appeared again until the next node started.
+        const node = msg.data.node
+        setState((s) =>
+          s.status === 'running'
+            ? { ...s, currentNodeId: node ?? s.currentNodeId, samplingProgress: { value: msg.data.value, max: msg.data.max } }
+            : s,
+        )
       } else if (msg.type === 'preview') {
         // No prompt_id on these frames — currentNodeId being non-null (i.e.
         // one of this job's own nodes is the one actually executing right
@@ -321,7 +343,9 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
     let cancelled = false
 
     loadRemoteJob(kind).then((job) => {
-      if (cancelled || !job) return
+      if (cancelled) return
+      setRecoveryChecked(true)
+      if (!job) return
 
       activePromptId.current = job.promptId
       startTime.current = job.startedAt
@@ -361,5 +385,5 @@ export function useImageGeneration<T>(buildWorkflow: (settings: T) => ComfyWorkf
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { ...state, settledCount, generate, reset }
+  return { ...state, settledCount, recoveryChecked, generate, reset }
 }

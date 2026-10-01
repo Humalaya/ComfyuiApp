@@ -42,17 +42,30 @@ function generateUUID(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
-function getClientId(): string {
-  const key = 'comfy-mobile-client-id'
-  let id = localStorage.getItem(key)
-  if (!id) {
-    id = generateUUID()
-    localStorage.setItem(key, id)
-  }
-  return id
-}
-
-export const clientId = getClientId()
+// There is deliberately NO long-lived clientId any more — neither on
+// submitted prompts nor on the WebSocket. ComfyUI's server keys its socket
+// registry by the connection's clientId, and when a connection closes it
+// does `sockets.pop(clientId)` without checking *which* socket it's
+// removing. With one stable id reused across reconnects, the previous
+// connection (a killed phone app's half-open TCP, a Vite proxy leg that
+// hasn't noticed the phone is gone yet) routinely closed *after* the new one
+// had registered — and that pop silently unregistered the new one. From
+// then on ComfyUI sent our progress/previews to nobody, while the app's
+// socket still looked perfectly open, so it never reconnected: generation
+// kept running but reopening the app showed no progress at all.
+//
+// Now every WebSocket connection gets a fresh id (see connect() below), so
+// no two connections ever share a registry slot, and prompts are queued
+// without a client_id, which makes ComfyUI broadcast their progress,
+// previews and "executing" events to every connected socket. Every hook
+// already filters those by prompt_id, so this also means any device that's
+// open — or a freshly reopened app — sees live progress for a running job.
+//
+// Cost: ComfyUI only sends execution_start / execution_cached /
+// execution_success and node-exception execution_error to a prompt's own
+// client_id, never broadcast. Errors are still caught within seconds by each
+// hook's /history poll; the video tab's between-phases node percentage just
+// no longer counts cached nodes.
 
 async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -66,7 +79,9 @@ export async function queuePrompt(workflow: ComfyWorkflow): Promise<QueuePromptR
   const res = await fetch(`${API_BASE}/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: workflow, client_id: clientId }),
+    // No client_id on purpose — see the note near the top of this file: it's
+    // what makes ComfyUI broadcast this prompt's progress to every socket.
+    body: JSON.stringify({ prompt: workflow }),
   })
   return asJson(res)
 }
@@ -220,15 +235,11 @@ interface ComfySocketManager {
 
 // A single real WebSocket, shared by every subscriber — video's generation
 // hook and every image-generation hook instance (SDXL, Krea2, ...) all want
-// live progress/preview at once now, but ComfyUI keys its server-side socket
-// registry by the `clientId` query param itself, not a fresh id per TCP
-// connection: a second `new WebSocket(...)` opened with the same clientId
-// silently steals delivery out from under the first (the server just
-// overwrites its sockets[clientId] entry), so independent hooks each running
-// their own connect-on-mount effect would race to "own" the one real
-// connection instead of all seeing the same messages. This module-level
-// singleton keeps exactly one socket alive and fans every message out to
-// however many subscribers currently want it.
+// live progress/preview at once. Since prompts are broadcast (see the note
+// near the top of this file), one socket per hook would just receive every
+// message several times over; this module-level singleton keeps exactly one
+// socket alive and fans every message out to however many subscribers
+// currently want it.
 let manager: ComfySocketManager | null = null
 
 function getManager(): ComfySocketManager {
@@ -305,7 +316,10 @@ function getManager(): ComfySocketManager {
     if (m.ws && (m.ws.readyState === WebSocket.OPEN || m.ws.readyState === WebSocket.CONNECTING)) return
 
     setStatus('connecting')
-    const ws = new WebSocket(`${WS_BASE}?clientId=${clientId}`)
+    // Fresh id per connection, never reused — see the note near the top of
+    // this file for why a stable id let a stale connection unregister a live
+    // one on ComfyUI's side.
+    const ws = new WebSocket(`${WS_BASE}?clientId=${generateUUID()}`)
     ws.binaryType = 'arraybuffer'
     m.ws = ws
     ws.onopen = () => {

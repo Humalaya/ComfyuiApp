@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-export type UretView = 'image' | 'video' | 'openwebui'
+export type UretView = 'image' | 'video' | 'civitai' | 'openwebui'
 
 interface Props {
   open: boolean
@@ -12,10 +12,11 @@ interface Props {
 const ITEMS: { id: UretView; label: string; icon: string }[] = [
   { id: 'image', label: 'Görsel', icon: '🖼️' },
   { id: 'video', label: 'Video', icon: '🎬' },
+  { id: 'civitai', label: 'Civitai', icon: '🌐' },
   { id: 'openwebui', label: 'OpenWebUI', icon: '💬' },
 ]
 
-// Left slide-in "çekmece" for switching between the three views behind the
+// Left slide-in "çekmece" for switching between the views behind the
 // "Üret" nav button. Kept always-mounted (visibility is CSS-only) so the
 // open/close slide can animate; a backdrop tap or Escape closes it, picking
 // an item closes it via onSelect -> App.goToUret.

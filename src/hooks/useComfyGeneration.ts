@@ -153,6 +153,19 @@ export function useComfyGeneration() {
   // stop advancing. This counter changes every single time, so watching it
   // alongside `status` can't miss one.
   const [settledCount, setSettledCount] = useState(0)
+  // False until the mount-time job-recovery check below has actually run
+  // (whether or not it found anything). A caller (App.tsx's queue-drain
+  // effect) can't tell "genuinely idle, nothing was ever running" apart from
+  // "idle because recovery hasn't reported back yet" just from `status`
+  // alone — both look identical (status === 'idle'). Racing that ambiguity
+  // against the queue's own separate PC-RAM load (loadRemoteQueue in
+  // App.tsx) used to let the queue-drain effect fire on a false "idle" *before*
+  // this hook's own recovery settled a leftover job to 'done' a moment later
+  // — two overlapping generate() calls for two different queued items, both
+  // stepping on the same activePromptId/tickInterval/pollInterval refs, with
+  // one of them silently losing track of its own submission. Gating the
+  // drain on this flag (not just on queueLoaded) closes that window.
+  const [recoveryChecked, setRecoveryChecked] = useState(false)
 
   const settle = useCallback((patch: Partial<GenerationState>) => {
     setState({ ...initialState, ...patch })
@@ -283,10 +296,17 @@ export function useComfyGeneration() {
         if (msg.type === 'progress' && msg.data.prompt_id === promptId) {
           if (samplingPhaseStart.current === null) samplingPhaseStart.current = Date.now()
           const progress = { value: msg.data.value, max: msg.data.max }
+          // progress also names its node — after a reopen mid-generation it's
+          // the first message that tells us which node is running (the
+          // 'executing' for it went out before we were listening), and
+          // currentNodeId is what lets this job's preview frames through.
+          const node = msg.data.node
           setState((s) => ({
             ...s,
             status: 'running',
             recovering: false,
+            currentNodeId: node ?? s.currentNodeId,
+            currentNodeTitle: node ? (nodeTitles.current[node] ?? s.currentNodeTitle ?? node) : s.currentNodeTitle,
             samplingProgress: progress,
             eta: computeEta(progress, samplingPhaseStart.current),
           }))
@@ -467,7 +487,9 @@ export function useComfyGeneration() {
     let cancelled = false
 
     loadRemoteJob(KIND).then((job) => {
-      if (cancelled || !job) return
+      if (cancelled) return
+      setRecoveryChecked(true)
+      if (!job) return
 
       activePromptId.current = job.promptId
       startTime.current = job.startedAt
@@ -521,5 +543,5 @@ export function useComfyGeneration() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { ...state, wsStatus, settledCount, generate, reset, cancel }
+  return { ...state, wsStatus, settledCount, recoveryChecked, generate, reset, cancel }
 }

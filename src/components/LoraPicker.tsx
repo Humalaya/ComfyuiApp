@@ -1,77 +1,138 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { loraThumbnailUrl } from '../api/comfyClient'
+import { HelpTip } from './HelpTip'
+import { isLoraCompatible, loraDisplayName, loraFolder, type LoraFamily, type LoraTab } from '../api/loraMeta'
 
 interface Props {
-  value: string
   options: string[]
-  onSelect: (name: string) => void
+  tab: LoraTab
+  families: Record<string, LoraFamily | null>
+  // Already in this tab's list — shown ticked and not selectable again.
+  alreadyAdded: string[]
+  // How many empty slots the workflow still has — selection stops there.
+  freeSlots: number
+  onConfirm: (names: string[]) => void
   onClose: () => void
 }
 
-// A searchable full-list picker instead of a plain <select> — with dozens of
-// similarly-named .safetensors files, a native dropdown meant scrolling
-// through a long, un-searchable, truncated list every single time. This
-// opens as a popup (same overlay pattern as FullscreenViewer/MetadataModal)
-// with a search box that filters as you type.
-export function LoraPicker({ value, options, onSelect, onClose }: Props) {
+// Multi-select LoRA picker: a thumbnail grid, filtered by default to the
+// LoRAs trained for this tab's model family (see loraMeta.ts), with folder
+// chips and search. Tap to tick, "N LoRA ekle" to add them all at once —
+// picking three LoRAs no longer means opening this three times.
+export function LoraPicker({ options, tab, families, alreadyAdded, freeSlots, onConfirm, onClose }: Props) {
   const [query, setQuery] = useState('')
-  const filtered = query.trim() ? options.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase())) : options
+  const [folder, setFolder] = useState('')
+  const [showIncompatible, setShowIncompatible] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+
+  const added = useMemo(() => new Set(alreadyAdded), [alreadyAdded])
+  const pool = useMemo(
+    () => (showIncompatible ? options : options.filter((o) => isLoraCompatible(o, tab, families))),
+    [options, tab, families, showIncompatible],
+  )
+  const hiddenCount = options.length - pool.length
+
+  const folders = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const o of pool) counts.set(loraFolder(o), (counts.get(loraFolder(o)) ?? 0) + 1)
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [pool])
+
+  const q = query.trim().toLowerCase()
+  const visible = pool.filter((o) => (!folder || loraFolder(o) === folder) && (!q || o.toLowerCase().includes(q)))
+
+  const full = selected.length >= freeSlots
+
+  function toggle(name: string) {
+    setSelected((s) => (s.includes(name) ? s.filter((x) => x !== name) : s.length >= freeSlots ? s : [...s, name]))
+  }
 
   return (
     <div className="popup-overlay" onClick={onClose}>
       <div className="lora-picker" onClick={(e) => e.stopPropagation()}>
         <div className="lora-picker-header">
           <input
-            type="text"
+            type="search"
             className="lora-picker-search"
             placeholder="LoRA ara…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            autoFocus
           />
           <button type="button" className="popup-close-inline" onClick={onClose} aria-label="Kapat">
             ✕
           </button>
         </div>
-        <div className="lora-picker-list">
+
+        {folders.length > 1 && (
+          <div className="chip-row chip-row-flush">
+            <button type="button" className={folder === '' ? 'chip chip-active' : 'chip'} onClick={() => setFolder('')}>
+              Tümü {pool.length}
+            </button>
+            {folders.map(([f, n]) => (
+              <button
+                key={f}
+                type="button"
+                className={folder === f ? 'chip chip-active' : 'chip'}
+                onClick={() => setFolder(folder === f ? '' : f)}
+              >
+                {f || '(kök)'} {n}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="lora-picker-grid">
+          {visible.length === 0 && <div className="empty-state">Eşleşme yok</div>}
+          {visible.map((name) => {
+            const isAdded = added.has(name)
+            const isSelected = selected.includes(name)
+            return (
+              <button
+                key={name}
+                type="button"
+                title={name}
+                disabled={isAdded || (full && !isSelected)}
+                className={['lora-tile', isSelected ? 'lora-tile-selected' : '', isAdded ? 'lora-tile-added' : ''].filter(Boolean).join(' ')}
+                onClick={() => toggle(name)}
+              >
+                <span className="lora-tile-thumb">
+                  <img
+                    src={loraThumbnailUrl(name)}
+                    alt=""
+                    loading="lazy"
+                    // rgthree answers 200 with a JSON body (not a 404) when a
+                    // LoRA has no preview file — onError is the only signal.
+                    onError={(e) => {
+                      e.currentTarget.style.visibility = 'hidden'
+                    }}
+                  />
+                  {(isSelected || isAdded) && <span className="lora-tile-check">{isAdded ? 'Ekli' : '✓'}</span>}
+                </span>
+                <span className="lora-tile-name">{loraDisplayName(name)}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="lora-picker-options">
           <button
             type="button"
-            className={value === '' ? 'lora-picker-item lora-picker-item-active' : 'lora-picker-item'}
-            onClick={() => {
-              onSelect('')
-              onClose()
-            }}
+            className={showIncompatible ? 'toggle-pill toggle-pill-on' : 'toggle-pill'}
+            aria-pressed={showIncompatible}
+            onClick={() => setShowIncompatible(!showIncompatible)}
           >
-            — Seçili değil —
+            Uyumsuzlar{hiddenCount > 0 ? ` · ${hiddenCount}` : ''}
           </button>
-          {filtered.length === 0 && <div className="empty-state">Eşleşme yok</div>}
-          {filtered.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className={name === value ? 'lora-picker-item lora-picker-item-active' : 'lora-picker-item'}
-              onClick={() => {
-                onSelect(name)
-                onClose()
-              }}
-            >
-              <span className="lora-picker-item-thumb">
-                <img
-                  src={loraThumbnailUrl(name)}
-                  alt=""
-                  loading="lazy"
-                  // rgthree responds 200 with a JSON body (not a real 404)
-                  // when there's no preview file — onError is the only way
-                  // to notice that, and hiding (not removing) the <img>
-                  // keeps the thumbnail box the same reserved size either way.
-                  onError={(e) => {
-                    e.currentTarget.style.visibility = 'hidden'
-                  }}
-                />
-              </span>
-              <span className="lora-picker-item-label">{name}</span>
-            </button>
-          ))}
+          <HelpTip>
+            Bu sekmenin modeliyle uyumsuz LoRA'lar (ör. SDXL'de Krea2/video LoRA'ları) varsayılan olarak gizlenir; bu düğme onları da
+            gösterir. Aynı anda en fazla boş slot sayısı ({freeSlots}) kadar LoRA seçilebilir.
+          </HelpTip>
+        </div>
+
+        <div className="lora-picker-footer">
+          <button type="button" className="generate-button" disabled={selected.length === 0} onClick={() => onConfirm(selected)}>
+            {selected.length > 0 ? `${selected.length} LoRA ekle` : freeSlots === 0 ? 'Bütün slotlar dolu' : 'LoRA seç'}
+          </button>
         </div>
       </div>
     </div>

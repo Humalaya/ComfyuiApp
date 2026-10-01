@@ -17,7 +17,7 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import crypto from 'node:crypto'
 import net from 'node:net'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 
@@ -483,6 +483,234 @@ app.get('/api/loras/civitai', async (req, res) => {
   }
 })
 
+// --- Civitai image/video browser (the app's "🌐 Civitai" view) ---
+// Proxied here rather than called from the phone so the API key (needed for
+// the full NSFW feed) never leaves this PC, and so the payload can be
+// trimmed to the handful of fields the app shows.
+const CIVITAI_SORTS = new Set(['Newest', 'Most Reactions', 'Most Comments'])
+const CIVITAI_PERIODS = new Set(['Day', 'Week', 'Month', 'Year', 'AllTime'])
+
+function civitaiHeaders() {
+  return CIVITAI_API_KEY ? { Authorization: `Bearer ${CIVITAI_API_KEY}` } : {}
+}
+
+async function fetchCivitaiJson(url) {
+  let upstream = await fetch(url, { headers: civitaiHeaders(), signal: AbortSignal.timeout(30000) })
+  // Civitai throws the odd transient 503 — one quiet retry before erroring.
+  if (upstream.status >= 500) {
+    await new Promise((r) => setTimeout(r, 800))
+    upstream = await fetch(url, { headers: civitaiHeaders(), signal: AbortSignal.timeout(30000) })
+  }
+  if (!upstream.ok) throw new HttpError(502, `Civitai API ${upstream.status}`)
+  return upstream.json()
+}
+
+// tRPC responses come as a flat, reference-compressed array (devalue
+// style): every value inside an object/array is an index into the root
+// array. Negative indices are sentinels (-1 undefined, the rest NaN/±Inf/-0
+// — none of which this feed uses, so they just become null).
+function civitaiUnflatten(arr) {
+  const memo = new Map()
+  const hydrate = (i) => {
+    if (i < 0) return i === -1 ? undefined : null
+    if (memo.has(i)) return memo.get(i)
+    const v = arr[i]
+    if (v === null || typeof v !== 'object') {
+      memo.set(i, v)
+      return v
+    }
+    if (Array.isArray(v)) {
+      // A leading string marks a special type: ["Date", iso], ["Set", ...].
+      if (typeof v[0] === 'string') {
+        const out = v[0] === 'Set' ? v.slice(1).map(hydrate) : v[1]
+        memo.set(i, out)
+        return out
+      }
+      const out = []
+      memo.set(i, out)
+      for (const x of v) out.push(hydrate(x))
+      return out
+    }
+    const out = {}
+    memo.set(i, out)
+    for (const [k, x] of Object.entries(v)) out[k] = hydrate(x)
+    return out
+  }
+  return hydrate(0)
+}
+
+const CIVITAI_CDN = 'https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA'
+// Browsing-level bit flags: PG 1, PG-13 2, R 4, X 8, XXX 16.
+const CIVITAI_LEVEL_ALL = 1 + 2 + 4 + 8 + 16
+const CIVITAI_LEVEL_NSFW = 4 + 8 + 16
+
+// The feed comes from civitai.red's own website feed (tRPC
+// image.getInfinite), not the public v1 /api/v1/images: v1's "Most
+// Reactions" ranking is broken for many queries (it caches per URL and some
+// entries come back as unranked 0–7 reaction posts — worst with its nsfw
+// filter, where Pony/Illustrious/NoobAI were almost always wrong), and its
+// "Newest" needs a period workaround. This is exactly what the site shows,
+// and answers in well under a second. civitai.com's copy of the endpoint is
+// SFW-only even when logged in, hence .red.
+// Undocumented — if its shape changes, this is the part to revisit.
+async function civitaiFeed({ sort, period, type, baseModels, withMeta, nsfwOnly, cursor }) {
+  const browsingLevel = nsfwOnly ? CIVITAI_LEVEL_NSFW : CIVITAI_LEVEL_ALL
+  const input = { period, sort, browsingLevel, types: [type], withMeta, limit: 40 }
+  if (baseModels) input.baseModels = [baseModels]
+  if (cursor) input.cursor = cursor
+  const body = await fetchCivitaiJson(`https://civitai.red/api/trpc/image.getInfinite?input=${encodeURIComponent(JSON.stringify({ json: input }))}`)
+  let data = body?.result?.data
+  data = typeof data === 'string' ? civitaiUnflatten(JSON.parse(data)) : data?.json
+  if (!data || !Array.isArray(data.items)) throw new HttpError(502, 'Civitai yanıtı tanınmadı.')
+  return {
+    items: data.items.map((it) => {
+      const s = it.stats ?? {}
+      return {
+        id: it.id,
+        url: `${CIVITAI_CDN}/${it.url}/original=true/${encodeURIComponent(it.name || it.url)}`,
+        type: it.type === 'video' ? 'video' : 'image',
+        width: it.width,
+        height: it.height,
+        createdAt: it.publishedAt || it.createdAt,
+        // The feed leaves baseModel empty — the filter, when set, is the answer.
+        baseModel: it.baseModel || baseModels || null,
+        username: it.user?.username || null,
+        reactions: (s.likeCountAllTime ?? 0) + (s.heartCountAllTime ?? 0) + (s.laughCountAllTime ?? 0) + (s.cryCountAllTime ?? 0),
+        comments: s.commentCountAllTime ?? 0,
+        // Not in the feed; the viewer fetches prompt/settings on open
+        // (/api/civitai/generation).
+        meta: null,
+      }
+    }),
+    nextCursor: data.nextCursor != null ? String(data.nextCursor) : null,
+  }
+}
+
+app.get('/api/civitai/images', async (req, res) => {
+  try {
+    const sort = CIVITAI_SORTS.has(req.query.sort) ? req.query.sort : 'Newest'
+    res.json(
+      await civitaiFeed({
+        sort,
+        period: sort === 'Newest' ? 'AllTime' : CIVITAI_PERIODS.has(req.query.period) ? req.query.period : 'Week',
+        type: req.query.type === 'video' ? 'video' : 'image',
+        baseModels: typeof req.query.baseModels === 'string' ? req.query.baseModels : '',
+        withMeta: req.query.withMeta === 'true',
+        nsfwOnly: req.query.nsfwOnly === 'true',
+        cursor: typeof req.query.cursor === 'string' ? req.query.cursor : '',
+      }),
+    )
+  } catch (err) {
+    sendError(res, err, 'Civitai listesi alınamadı.')
+  }
+})
+
+// Civitai's own generator endpoint — not part of the documented v1 API. The
+// feed carries no generation metadata, so this is where the viewer gets the
+// prompt, settings, size and checkpoint/LoRAs of an opened post. Best-effort:
+// any failure just means "no info".
+app.get('/api/civitai/generation', async (req, res) => {
+  try {
+    const id = Number(req.query.id)
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Geçersiz id.')
+    const upstream = await fetch(`https://civitai.com/api/generation/data?type=image&id=${id}`, {
+      headers: civitaiHeaders(),
+      signal: AbortSignal.timeout(20000),
+    })
+    if (!upstream.ok) throw new HttpError(502, `Civitai ${upstream.status}`)
+    const data = await upstream.json()
+    const p = data.params ?? {}
+    res.json({
+      prompt: typeof p.prompt === 'string' ? p.prompt : null,
+      negativePrompt: typeof p.negativePrompt === 'string' ? p.negativePrompt : null,
+      seed: p.seed ?? null,
+      steps: p.steps ?? null,
+      cfgScale: p.cfgScale ?? null,
+      sampler: p.sampler ?? null,
+      scheduler: p.scheduler ?? null,
+      model: p.Model ?? null,
+      width: p.width ?? p.aspectRatio?.width ?? null,
+      height: p.height ?? p.aspectRatio?.height ?? null,
+      resources: (data.resources ?? []).map((r) => ({
+        name: r.model?.name ? `${r.model.name}${r.name ? ` — ${r.name}` : ''}` : r.name,
+        type: r.model?.type ?? null,
+        baseModel: r.baseModel ?? null,
+        strength: typeof r.strength === 'number' ? r.strength : null,
+      })),
+    })
+  } catch (err) {
+    sendError(res, err, 'Civitai üretim bilgisi alınamadı.')
+  }
+})
+
+// Which base-model family each LoRA was trained for, read straight from the
+// .safetensors header (kohya's ss_base_model_version / the modelspec
+// architecture field) — so the app's LoRA picker can show only the LoRAs
+// that actually work with the current tab's model (an SDXL LoRA does nothing
+// useful on Krea2, and vice versa) without guessing from folder names. Only
+// the small JSON header at the start of each file is read, never the
+// weights, and results are cached per file until its mtime/size changes.
+const loraFamilyCache = new Map() // relative name -> { mtimeMs, size, family }
+
+async function readSafetensorsArchitecture(filePath) {
+  const fh = await fs.open(filePath, 'r')
+  try {
+    const lenBuf = Buffer.alloc(8)
+    await fh.read(lenBuf, 0, 8, 0)
+    const headerLen = Number(lenBuf.readBigUInt64LE(0))
+    if (!headerLen || headerLen > 64 * 1024 * 1024) return null
+    const header = Buffer.alloc(headerLen)
+    await fh.read(header, 0, headerLen, 8)
+    const meta = JSON.parse(header.toString('utf8')).__metadata__ || {}
+    return meta['modelspec.architecture'] || meta.ss_base_model_version || null
+  } catch {
+    return null
+  } finally {
+    await fh.close()
+  }
+}
+
+// null = the file doesn't say (the client falls back to its folder then).
+function loraFamilyFromArchitecture(arch) {
+  if (!arch) return null
+  const a = String(arch).toLowerCase()
+  if (a.includes('krea2')) return 'krea2'
+  if (a.includes('minimax')) return 'video'
+  if (a.includes('stable-diffusion-xl') || a.includes('sdxl')) return 'sdxl'
+  if (a.includes('stable-diffusion-v1') || a.includes('sd_v1')) return 'sd1'
+  return 'other'
+}
+
+async function listLoraFiles(dir, prefix = '') {
+  const out = []
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) out.push(...(await listLoraFiles(path.join(dir, entry.name), rel)))
+    else if (entry.name.toLowerCase().endsWith('.safetensors')) out.push(rel)
+  }
+  return out
+}
+
+app.get('/api/loras/meta', async (_req, res) => {
+  try {
+    if (!LORA_ROOT) throw new HttpError(503, 'LoRA klasörü yapılandırılmamış (.env: COMFYUI_LORA_DIR).')
+    const result = {}
+    for (const name of await listLoraFiles(LORA_ROOT)) {
+      const filePath = path.join(LORA_ROOT, name)
+      const stat = await fs.stat(filePath)
+      let entry = loraFamilyCache.get(name)
+      if (!entry || entry.mtimeMs !== stat.mtimeMs || entry.size !== stat.size) {
+        entry = { mtimeMs: stat.mtimeMs, size: stat.size, family: loraFamilyFromArchitecture(await readSafetensorsArchitecture(filePath)) }
+        loraFamilyCache.set(name, entry)
+      }
+      result[name] = entry.family
+    }
+    res.json(result)
+  } catch (err) {
+    sendError(res, err, 'LoRA bilgileri okunamadı.')
+  }
+})
+
 // The one job currently submitted-to-or-tracked-against ComfyUI for this
 // generation kind, if any — `null` clears it. Body shape: `{ promptId,
 // startedAt } | null`, opaque to this server beyond that minimal check; the
@@ -588,70 +816,83 @@ app.post('/api/system/models/:id/unload', async (req, res) => {
 // copy *this* server started is tracked/stoppable; one already running from a
 // terminal is invisible here (the port probes below are the status readout
 // for that case).
-let startAllChild = null // { proc, pid, startedAt } | null
+// ComfyUI runs as its own transient systemd user unit (systemd-run), not as
+// a child of this server. As a child it lived in mobile-control.service's
+// cgroup, so every panel restart (KillMode=control-group) killed ComfyUI
+// along with it — mid-generation, models and all. As its own unit it
+// survives panel restarts, and stop/status go through systemctl.
+const COMFYUI_UNIT = 'comfyui.service'
 
-function startAllRunning() {
-  return !!startAllChild && startAllChild.proc.exitCode === null && !startAllChild.proc.killed
+function systemctlUser(args) {
+  return new Promise((resolve, reject) => {
+    execFile('systemctl', ['--user', ...args], { timeout: 15000 }, (err, stdout, stderr) => {
+      if (err && err.code !== 3) reject(new Error((stderr || err.message).trim())) // 3 = "not active" for is-active/show
+      else resolve(stdout)
+    })
+  })
+}
+
+async function comfyUnitStatus() {
+  const out = await systemctlUser(['show', COMFYUI_UNIT, '-p', 'ActiveState', '-p', 'MainPID', '-p', 'ExecMainStartTimestamp', '--timestamp=unix'])
+  const props = Object.fromEntries(out.trim().split('\n').map((l) => l.split(/=(.*)/s).slice(0, 2)))
+  const running = props.ActiveState === 'active' || props.ActiveState === 'activating'
+  const startedSec = Number((props.ExecMainStartTimestamp || '').replace('@', ''))
+  return {
+    running,
+    pid: running && Number(props.MainPID) > 0 ? Number(props.MainPID) : undefined,
+    startedAt: running && startedSec > 0 ? startedSec * 1000 : undefined,
+  }
 }
 
 app.get('/api/system/start-all', async (_req, res) => {
-  const [comfyUp, panelUp] = await Promise.all([probePort(COMFYUI_PROBE_PORT), probePort(5173)])
-  const alive = startAllRunning()
-  res.json({
-    script: START_ALL_SCRIPT,
-    running: alive,
-    pid: alive ? startAllChild?.pid : undefined,
-    startedAt: alive ? startAllChild?.startedAt : undefined,
-    comfyUp,
-    panelUp,
-  })
+  try {
+    const [comfyUp, panelUp, unit] = await Promise.all([probePort(COMFYUI_PROBE_PORT), probePort(5173), comfyUnitStatus()])
+    res.json({ script: START_ALL_SCRIPT, ...unit, comfyUp, panelUp })
+  } catch (err) {
+    sendError(res, err, 'ComfyUI durumu alınamadı.')
+  }
 })
 
 app.post('/api/system/start-all/start', async (req, res) => {
   try {
-    if (startAllRunning()) throw new HttpError(409, 'start-all.sh zaten bu panelden başlatıldı.')
+    if ((await comfyUnitStatus()).running) throw new HttpError(409, 'ComfyUI zaten çalışıyor.')
     try {
       await fs.access(START_ALL_SCRIPT, fsSync.constants.X_OK)
     } catch {
       throw new HttpError(404, `Script çalıştırılabilir değil ya da bulunamadı: ${START_ALL_SCRIPT}`)
     }
-    const proc = spawn('bash', [START_ALL_SCRIPT], {
-      cwd: path.dirname(START_ALL_SCRIPT),
-      detached: true, // own process group → stop can kill the whole tree
-      stdio: 'ignore',
+    await new Promise((resolve, reject) => {
+      execFile(
+        'systemd-run',
+        [
+          '--user',
+          `--unit=${COMFYUI_UNIT}`,
+          '--description=ComfyUI (mobile-control panelinden başlatıldı)',
+          // Remove the unit once it stops, failed or not — otherwise a
+          // crashed run blocks the next start under the same name.
+          '--collect',
+          `--working-directory=${path.dirname(START_ALL_SCRIPT)}`,
+          '-p',
+          'TimeoutStopSec=15',
+          'bash',
+          START_ALL_SCRIPT,
+        ],
+        { timeout: 15000 },
+        (err, _stdout, stderr) => (err ? reject(new Error((stderr || err.message).trim())) : resolve()),
+      )
     })
-    proc.unref()
-    const entry = { proc, pid: proc.pid, startedAt: Date.now() }
-    startAllChild = entry
-    proc.on('exit', () => {
-      if (startAllChild === entry) startAllChild = null
-    })
-    res.json({ ok: true, pid: proc.pid })
+    res.json({ ok: true, ...(await comfyUnitStatus()) })
   } catch (err) {
     sendError(res, err, 'start-all.sh başlatılamadı.')
   }
 })
 
-app.post('/api/system/start-all/stop', (_req, res) => {
+app.post('/api/system/start-all/stop', async (_req, res) => {
   try {
-    if (!startAllRunning()) throw new HttpError(409, 'Bu panelden başlatılmış çalışan bir start-all.sh yok.')
-    const entry = startAllChild
-    const pid = entry.pid
-    const signal = (sig) => {
-      try {
-        process.kill(-pid, sig) // negative pid → whole process group
-      } catch {
-        try {
-          process.kill(pid, sig)
-        } catch {
-          /* already gone */
-        }
-      }
-    }
-    signal('SIGTERM')
-    setTimeout(() => {
-      if (entry.proc.exitCode === null) signal('SIGKILL')
-    }, 6000).unref()
+    if (!(await comfyUnitStatus()).running) throw new HttpError(409, 'Bu panelden başlatılmış çalışan bir ComfyUI yok.')
+    // SIGTERM to the whole unit, SIGKILL after TimeoutStopSec — systemd
+    // does the escalation the old process-group code did by hand.
+    await systemctlUser(['stop', '--no-block', COMFYUI_UNIT])
     res.json({ ok: true })
   } catch (err) {
     sendError(res, err, 'start-all.sh durdurulamadı.')
@@ -667,6 +908,29 @@ app.post('/api/system/shutdown', (_req, res) => {
   setTimeout(() => {
     spawn('systemctl', ['poweroff'], { detached: true, stdio: 'ignore' }).unref()
   }, 800)
+})
+
+// Sleep instead of power-off: resume takes seconds and ComfyUI (with its
+// models still in VRAM — nvidia-suspend preserves video memory here) carries
+// on where it was. Woken again by a Wake-on-LAN packet from the APK's
+// offline page (android/.../WakeOnLanPlugin.java). Refused while ComfyUI
+// has work, since suspending mid-generation would just stall it.
+app.post('/api/system/suspend', async (_req, res) => {
+  try {
+    const queue = await fetch(`http://127.0.0.1:${COMFYUI_PROBE_PORT}/queue`, { signal: AbortSignal.timeout(3000) })
+      .then((r) => r.json())
+      .catch(() => null)
+    const busy = queue ? queue.queue_running.length + queue.queue_pending.length : 0
+    if (busy > 0) throw new HttpError(409, `ComfyUI'de ${busy} iş var — bitince tekrar dene.`)
+    res.json({ ok: true })
+    // Same reasoning as shutdown above: let the response reach the phone
+    // first; an active local session may suspend without sudo (CanSuspend → "yes").
+    setTimeout(() => {
+      spawn('systemctl', ['suspend'], { detached: true, stdio: 'ignore' }).unref()
+    }, 800)
+  } catch (err) {
+    sendError(res, err, 'Uyku moduna geçilemedi.')
+  }
 })
 
 app.listen(PORT, () => {

@@ -5,6 +5,9 @@ import { GenerationPreview } from './GenerationPreview'
 import { ResultCarousel } from './ResultCarousel'
 import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
 import { CollapsibleSection } from './CollapsibleSection'
+import { HelpTip } from './HelpTip'
+import { randomSeed, SeedField } from './SeedField'
+import { modelLabel } from '../utils/modelLabel'
 import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useImageGeneration } from '../hooks/useImageGeneration'
 import { buildKrea2Workflow, getDefaultKrea2Settings, KREA2_OUTPUT_NODE_ID, type Krea2GenerationSettings } from '../workflow/krea2FieldMap'
@@ -13,9 +16,6 @@ import { loadKrea2Settings, normalizeKrea2Settings, saveKrea2Settings } from '..
 import { appendTriggerWords } from '../utils/promptText'
 import { loadRemoteQueue, saveRemoteQueue } from '../storage/remoteQueueStorage'
 
-function randomSeed() {
-  return Math.floor(Math.random() * 1_000_000_000_000)
-}
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -74,8 +74,8 @@ export function Krea2GenerateTab({ importRequest }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    loadRemoteQueue(KIND, normalizeKrea2Settings).then((loaded) => {
-      if (cancelled) return
+    loadRemoteQueue(KIND, normalizeKrea2Settings, () => cancelled).then((loaded) => {
+      if (cancelled || loaded === null) return
       setQueue(loaded)
       setQueueLoaded(true)
     })
@@ -95,7 +95,27 @@ export function Krea2GenerateTab({ importRequest }: Props) {
   const lastDrainedKey = useRef<string | null>(null)
   useEffect(() => {
     if (!(gen.status === 'done' || gen.status === 'error' || gen.status === 'idle')) return
-    const key = `${gen.status}:${gen.settledCount}`
+    // Wait for the queue's own PC-RAM load to finish before deciding it's
+    // empty — this races gen's own mount-time job recovery (see
+    // useImageGeneration.ts). If that settles first and finds the job
+    // already done, `queue` can still be its initial `[]` at that exact
+    // moment — reading queue.length as "0, nothing to drain" then would
+    // strand every real pending item forever, since queueLoaded flipping
+    // true afterwards was never a dependency this effect re-ran for.
+    // Including it as one now (see the array below) is what makes that late
+    // queue load retry this check.
+    if (!queueLoaded) return
+    // Also wait for gen's OWN mount-time job-recovery check to have actually
+    // run — see App.tsx's identical guard for the full rationale. Without
+    // this, 'idle' (which means EITHER "genuinely nothing running" OR
+    // "recovery hasn't reported back yet") could get read as the former
+    // right before recovery settles a leftover job to 'done' a moment later,
+    // firing this effect twice and starting two queued items whose
+    // generate() calls step on the same shared refs — this is what let
+    // queued Krea2/SDXL jobs vanish without ever reaching ComfyUI after a
+    // background process kill.
+    if (!gen.recoveryChecked) return
+    const key = `${gen.status}:${gen.settledCount}:${queueLoaded}`
     if (lastDrainedKey.current === key) return
     lastDrainedKey.current = key
 
@@ -110,7 +130,7 @@ export function Krea2GenerateTab({ importRequest }: Props) {
     setQueue(rest)
     gen.generate(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen.status, gen.settledCount])
+  }, [gen.status, gen.settledCount, queueLoaded, gen.recoveryChecked])
 
   // See the importRequest prop's own comment (and ImageGenerateTab.tsx's
   // identical effect) — reacts only to `id` changing.
@@ -231,7 +251,7 @@ export function Krea2GenerateTab({ importRequest }: Props) {
           {!objectInfo.krea2UnetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
           {objectInfo.krea2UnetNames.map((name) => (
             <option key={name} value={name}>
-              {name}
+              {modelLabel(name)}
             </option>
           ))}
         </select>
@@ -261,19 +281,30 @@ export function Krea2GenerateTab({ importRequest }: Props) {
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Adım Sayısı (1. Geçiş)</label>
+          <label className="field-label">
+            Adım · 1. geçiş
+            <HelpTip>
+              Bu workflow iki geçişli çalışıyor: ilki kaba yapıyı oluşturuyor, ikincisi düşük denoise ile inceliyor. Adımlar ayrı ayrı
+              ayarlanabiliyor.
+            </HelpTip>
+          </label>
           <NumberField min={1} max={60} step={1} value={settings.steps1} onChange={(v) => update('steps1', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Adım Sayısı (2. Geçiş)</label>
+          <label className="field-label">Adım · 2. geçiş</label>
           <NumberField min={1} max={30} step={1} value={settings.steps2} onChange={(v) => update('steps2', v)} />
         </div>
       </div>
-      <span className="field-hint">Bu workflow iki geçişli çalışıyor — ilki kaba yapıyı oluşturuyor, ikincisi düşük denoise ile inceliyor; ayrı ayrı ayarlanabiliyor.</span>
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Batch Size</label>
+          <label className="field-label">
+            Batch Size
+            <HelpTip>
+              <b>Batch Size:</b> tek işte kaç görsel üretileceği. <b>Batch Count:</b> kaç ayrı işin art arda kuyruğa ekleneceği.
+              İkisi çarpılır — 4 × 3 = 3 iş, her birinde 4 görsel.
+            </HelpTip>
+          </label>
           <NumberField min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
         </div>
         <div className="field">
@@ -281,47 +312,26 @@ export function Krea2GenerateTab({ importRequest }: Props) {
           <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
         </div>
       </div>
-      <span className="field-hint">
-        {settings.batchCount > 1
-          ? `${settings.batchCount} ayrı iş art arda kuyruğa eklenecek, her biri ${settings.batchSize} görsel üretecek (toplam ${settings.batchSize * settings.batchCount} görsel).`
-          : settings.batchSize > 1
-            ? `${settings.batchSize} görsel tek seferde üretilecek — sonuç kartında hepsi gösterilir, hepsi Galeri'de de görünür.`
-            : 'Batch Size: tek işte kaç görsel üretilecek. Batch Count: kaç ayrı iş art arda kuyruğa eklenecek.'}
-      </span>
 
-      <div className="field">
-        <label className="field-label">Seed</label>
-        <div className="seed-row">
-          <NumberField value={settings.seed} onChange={(v) => update('seed', v)} />
-          <button type="button" className="secondary-button" onClick={() => update('seed', randomSeed())}>
-            🎲 Rastgele
-          </button>
-          <button
-            type="button"
-            className={settings.fixedSeed ? 'switch switch-on seed-fixed-switch' : 'switch seed-fixed-switch'}
-            aria-pressed={settings.fixedSeed}
-            onClick={() => update('fixedSeed', !settings.fixedSeed)}
-            aria-label="Seed'i sabitle"
-          >
-            <span className="switch-knob" />
-          </button>
-        </div>
-        <span className="field-hint">{settings.fixedSeed ? 'Sabit — her üretimde aynı seed kullanılır' : 'Rastgele — her üretimde yeni bir seed seçilir'}</span>
-      </div>
+      <SeedField
+        seed={settings.seed}
+        fixed={settings.fixedSeed}
+        onSeedChange={(v) => update('seed', v)}
+        onFixedChange={(v) => update('fixedSeed', v)}
+      />
 
       <LoraList
         loras={settings.loras}
         loraNames={objectInfo.loraNames}
+        tab="krea2"
         onChange={updateLora}
         onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
       />
 
       <CollapsibleSection title="Gelişmiş Ayarlar">
-        <span className="field-hint">Bu workflow iki geçişli olduğu için her ayar da ayrı ayrı — 1. Geçiş ve 2. Geçiş kendi sampler/scheduler/denoise'una sahip.</span>
-
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Sampler (1. Geçiş)</label>
+            <label className="field-label">Sampler · 1</label>
             <select value={settings.samplerName1} onChange={(e) => update('samplerName1', e.target.value)} disabled={objectInfo.loading}>
               {!objectInfo.krea2SamplerNames.includes(settings.samplerName1) && (
                 <option value={settings.samplerName1}>{settings.samplerName1}</option>
@@ -334,7 +344,7 @@ export function Krea2GenerateTab({ importRequest }: Props) {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">Scheduler (1. Geçiş)</label>
+            <label className="field-label">Scheduler · 1</label>
             <select value={settings.scheduler1} onChange={(e) => update('scheduler1', e.target.value)} disabled={objectInfo.loading}>
               {!objectInfo.schedulerNames.includes(settings.scheduler1) && <option value={settings.scheduler1}>{settings.scheduler1}</option>}
               {objectInfo.schedulerNames.map((name) => (
@@ -346,13 +356,13 @@ export function Krea2GenerateTab({ importRequest }: Props) {
           </div>
         </div>
         <div className="field">
-          <label className="field-label">Denoise (1. Geçiş)</label>
+          <label className="field-label">Denoise · 1</label>
           <NumberField min={0} max={1} step={0.01} value={settings.denoise1} onChange={(v) => update('denoise1', v)} />
         </div>
 
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Sampler (2. Geçiş)</label>
+            <label className="field-label">Sampler · 2</label>
             <select value={settings.samplerName2} onChange={(e) => update('samplerName2', e.target.value)} disabled={objectInfo.loading}>
               {!objectInfo.krea2SamplerNames.includes(settings.samplerName2) && (
                 <option value={settings.samplerName2}>{settings.samplerName2}</option>
@@ -365,7 +375,7 @@ export function Krea2GenerateTab({ importRequest }: Props) {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">Scheduler (2. Geçiş)</label>
+            <label className="field-label">Scheduler · 2</label>
             <select value={settings.scheduler2} onChange={(e) => update('scheduler2', e.target.value)} disabled={objectInfo.loading}>
               {!objectInfo.schedulerNames.includes(settings.scheduler2) && <option value={settings.scheduler2}>{settings.scheduler2}</option>}
               {objectInfo.schedulerNames.map((name) => (
@@ -377,7 +387,7 @@ export function Krea2GenerateTab({ importRequest }: Props) {
           </div>
         </div>
         <div className="field">
-          <label className="field-label">Denoise (2. Geçiş)</label>
+          <label className="field-label">Denoise · 2</label>
           <NumberField min={0} max={1} step={0.01} value={settings.denoise2} onChange={(v) => update('denoise2', v)} />
         </div>
       </CollapsibleSection>
@@ -385,7 +395,7 @@ export function Krea2GenerateTab({ importRequest }: Props) {
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
       <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
-        {isBusy ? '+ Kuyruğa Ekle' : 'Oluştur'}
+        {isBusy ? '+ Kuyruğa Ekle' : settings.batchSize * settings.batchCount > 1 ? `Oluştur · ${settings.batchSize * settings.batchCount}` : 'Oluştur'}
       </button>
 
       {viewerUrl !== null && (

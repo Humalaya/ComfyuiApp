@@ -15,6 +15,15 @@ const config: CapacitorConfig = {
   server: {
     url: DEV_SERVER_URL,
     cleartext: true, // plain http, not https — required or Android blocks the request
+    // Bundled page (public/offline.html) shown when the PC can't be reached
+    // — asleep or off. It can wake the PC over Wake-on-LAN.
+    errorPath: 'offline.html',
+  },
+  android: {
+    // offline.html is served from Capacitor's own https://localhost origin
+    // and has to probe the PC over plain http to notice it woke up — the
+    // WebView blocks that as mixed content unless allowed.
+    allowMixedContent: true,
   },
 };
 

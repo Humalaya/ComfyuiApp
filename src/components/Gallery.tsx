@@ -10,6 +10,7 @@ import type { GenerationSettings } from '../workflow/fieldMap'
 import type { ImageGenerationSettings } from '../workflow/imageFieldMap'
 import type { Krea2GenerationSettings } from '../workflow/krea2FieldMap'
 import { FullscreenViewer } from './FullscreenViewer'
+import { HelpTip } from './HelpTip'
 import { MetadataModal } from './MetadataModal'
 
 const PAGE_SIZE = 60
@@ -50,8 +51,12 @@ interface Props {
   onSendToCreate: (payload: ImportPayload) => void
 }
 
-function formatDate(mtimeMs: number): string {
-  return new Date(mtimeMs).toLocaleString('tr-TR', { dateStyle: 'medium', timeStyle: 'short' })
+// Tiles sit inside a dated folder already — the time of day is what's left
+// to tell apart; anything older than today also gets its short date.
+function formatTime(mtimeMs: number): string {
+  const d = new Date(mtimeMs)
+  const time = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })} ${time}`
 }
 
 function formatSize(bytes: number): string {
@@ -268,29 +273,31 @@ export function Gallery({ onSendToCreate }: Props) {
   return (
     <div className="gallery">
       {sources.length > 1 && (
-        <div className="source-tabs">
+        <div className="seg seg-accent">
           {sources.map((s) => (
-            <button key={s.id} className={s.id === source ? 'source-tab source-tab-active' : 'source-tab'} onClick={() => switchSource(s.id)}>
+            <button key={s.id} type="button" className={s.id === source ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => switchSource(s.id)}>
               {s.label}
             </button>
           ))}
         </div>
       )}
 
-      {currentPath && (
-        <div className="breadcrumb">
-          <button type="button" className="secondary-button" onClick={goUp}>
-            ⬅ Geri
+      <div className="gallery-toolbar">
+        {currentPath ? (
+          <button type="button" className="icon-button" onClick={goUp} aria-label="Geri">
+            ‹
           </button>
-          <span className="breadcrumb-path">{currentPath}</span>
-        </div>
-      )}
-
-      <button type="button" className="secondary-button" onClick={refresh} disabled={loading}>
-        {loading ? 'Yükleniyor…' : '🔄 Yenile'}
-      </button>
-
-      <span className="field-hint">Kaydetmek/paylaşmak için bir dosyaya dokunup büyütün, sonra üzerine uzun basın.</span>
+        ) : null}
+        <span className="gallery-path">{currentPath || 'Klasörler'}</span>
+        {visibleFiles.length > 0 && <span className="gallery-count">{items.length}</span>}
+        <button type="button" className="icon-button" onClick={refresh} disabled={loading} aria-label="Yenile">
+          {loading ? <span className="spinner spinner-small" /> : '↻'}
+        </button>
+        <HelpTip>
+          Büyütmek için bir dosyaya dokun; büyütülmüş görünümde sağa-sola kaydırarak geçiş yapabilirsin. Kaydetmek/paylaşmak için
+          büyütülmüş dosyanın üzerine uzun bas. PNG'lerdeki 📋 düğmesi üretim ayarlarını gösterir ve Oluştur sekmelerine gönderir.
+        </HelpTip>
+      </div>
 
       {error && <div className="field-error">{error}</div>}
       {!loading && !error && folders.length === 0 && items.length === 0 && (
@@ -298,7 +305,7 @@ export function Gallery({ onSendToCreate }: Props) {
       )}
 
       {folders.length > 0 && (
-        <div className="folder-list">
+        <div className="folder-grid">
           {folders.map((folder) => (
             <button
               key={folder}
@@ -306,7 +313,10 @@ export function Gallery({ onSendToCreate }: Props) {
               className={folder === justLeftPath ? 'folder-tile folder-tile-recent' : 'folder-tile'}
               onClick={() => openFolder(folder)}
             >
-              📁 {folderLabel(folder)}
+              <span className="folder-tile-icon" aria-hidden="true">
+                📁
+              </span>
+              <span className="folder-tile-name">{folderLabel(folder)}</span>
             </button>
           ))}
         </div>
@@ -315,49 +325,47 @@ export function Gallery({ onSendToCreate }: Props) {
       <div className="gallery-grid">
         {visibleFiles.map((item) => (
           <div key={item.name} className="gallery-tile" onClick={() => setActiveIndex(items.indexOf(item))}>
-            <div className="gallery-thumb-wrap">
-              {item.type === 'image' ? (
-                <img className="gallery-thumb" src={outputThumbnailUrl(source, item.name)} alt={item.name} loading="lazy" />
-              ) : (
-                // Deliberately no <video src> here: with hundreds/thousands of
-                // outputs in the folder, giving every grid tile a real video
-                // source made the phone's browser fire off a full video load
-                // per tile, which piled up dozens of backend faststart-remuxes
-                // at once and starved whichever video the user actually
-                // tapped. A static placeholder costs nothing.
-                <div className="gallery-video-placeholder">▶</div>
-              )}
-            </div>
-            <div className="gallery-meta">
-              <span className="gallery-name" title={item.name}>
-                {folderLabel(item.name)}
-              </span>
+            {item.type === 'image' ? (
+              <img className="gallery-thumb" src={outputThumbnailUrl(source, item.name)} alt={item.name} loading="lazy" />
+            ) : (
+              // Deliberately no <video src> here: with hundreds/thousands of
+              // outputs in the folder, giving every grid tile a real video
+              // source made the phone's browser fire off a full video load
+              // per tile, which piled up dozens of backend faststart-remuxes
+              // at once and starved whichever video the user actually
+              // tapped. A static placeholder costs nothing.
+              <div className="gallery-video-placeholder">
+                <span className="gallery-play">▶</span>
+              </div>
+            )}
+            <div className="gallery-overlay">
+              {/* Videos have no thumbnail — the name is what tells them apart. */}
+              {item.type !== 'image' && <span className="gallery-name">{folderLabel(item.name)}</span>}
               <span className="gallery-sub">
-                {formatDate(item.mtimeMs)} · {formatSize(item.size)}
+                {formatTime(item.mtimeMs)} · {formatSize(item.size)}
               </span>
             </div>
-            <div className="gallery-actions">
-              {item.ext === '.png' && (
-                <button
-                  type="button"
-                  className="gallery-metadata-button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    loadMetadata(item)
-                  }}
-                  disabled={metadataLoadingName === item.name}
-                >
-                  {metadataLoadingName === item.name ? '…' : '📋 Metadata'}
-                </button>
-              )}
-            </div>
+            {item.ext === '.png' && (
+              <button
+                type="button"
+                className="gallery-metadata-button"
+                aria-label="Metadata"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  loadMetadata(item)
+                }}
+                disabled={metadataLoadingName === item.name}
+              >
+                {metadataLoadingName === item.name ? '…' : '📋'}
+              </button>
+            )}
           </div>
         ))}
       </div>
 
       {visibleCount < items.length && (
-        <button type="button" className="secondary-button" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>
-          Daha Fazla Yükle ({items.length - visibleCount} kaldı)
+        <button type="button" className="secondary-button more-button" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>
+          Daha fazla · {items.length - visibleCount}
         </button>
       )}
 

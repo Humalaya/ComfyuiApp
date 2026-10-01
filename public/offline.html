@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bilgisayara ulaşılamıyor</title>
+<!--
+  Shown by Capacitor (server.errorPath in capacitor.config.ts) when the PC —
+  which serves this whole app — can't be reached: asleep, off, or the phone
+  isn't on the home network. Bundled inside the APK, so it works with the PC
+  down. "Bilgisayarı uyandır" sends a Wake-on-LAN packet through the native
+  window.WakeOnLan object (WakeOnLan.java); meanwhile the page keeps probing
+  the PC and opens the app as soon as it answers.
+-->
+<style>
+  :root { --bg:#0f1115; --surface:#1a1d24; --surface-2:#22262f; --border:#2e333d; --text:#f2f3f5; --text-dim:#9aa1ab; --accent:#7c5cff; --danger:#ff5c5c; --success:#3ddc84; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  main { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; gap: 16px; max-width: 420px; margin: 0 auto; padding: 24px 16px; }
+  .icon { font-size: 2.6rem; text-align: center; }
+  h1 { margin: 0; font-size: 1.2rem; text-align: center; }
+  p { margin: 0; color: var(--text-dim); font-size: 0.9rem; line-height: 1.5; text-align: center; }
+  button { width: 100%; padding: 16px; border-radius: 12px; border: none; font-size: 1.05rem; font-weight: 600; }
+  .primary { background: var(--accent); color: white; }
+  .primary:disabled { background: var(--surface-2); color: var(--text-dim); }
+  .secondary { background: var(--surface-2); color: var(--text); font-weight: 500; font-size: 0.95rem; padding: 13px; }
+  .status { min-height: 1.5em; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.9rem; color: var(--text-dim); text-align: center; }
+  .status.ok { color: var(--success); }
+  .status.err { color: var(--danger); }
+  .spinner { width: 16px; height: 16px; flex-shrink: 0; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <div class="icon">☾</div>
+  <h1>Bilgisayara ulaşılamıyor</h1>
+  <p>Bilgisayar uykuda ya da kapalı olabilir. Telefon evdeki Wi-Fi'ye bağlıyken uyandırabilirsin.</p>
+  <button id="wake" class="primary" type="button">Bilgisayarı uyandır</button>
+  <div id="status" class="status"></div>
+  <button id="retry" class="secondary" type="button">Tekrar dene</button>
+</main>
+<script>
+  // This PC's wired network card (enp6s0), the home LAN's broadcast address
+  // and the app's server — the same address as server.url in
+  // capacitor.config.ts (this page itself is served from Capacitor's own
+  // https://localhost, so it can't derive it). If the network card, the LAN
+  // or the PC's IP changes, update these and rebuild the APK.
+  const PC_MAC = '30:56:0f:5e:8e:52';
+  const LAN_BROADCAST = '192.168.1.255';
+  const APP_URL = 'http://192.168.1.62:5173/';
+  const PROBE_MS = 3000;
+  const WAKE_TIMEOUT_MS = 90000;
+
+  const statusEl = document.getElementById('status');
+  const wakeBtn = document.getElementById('wake');
+  let wakeStartedAt = null;
+
+  function setStatus(text, kind, spinning) {
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+    statusEl.innerHTML = (spinning ? '<span class="spinner"></span>' : '') + '<span></span>';
+    statusEl.lastChild.textContent = text;
+  }
+
+  async function serverUp() {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    try {
+      // no-cors: only "did anything answer" matters, not the body.
+      await fetch(APP_URL + '?probe=' + Date.now(), { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function probeLoop() {
+    if (await serverUp()) {
+      setStatus('Bilgisayar açık — uygulama açılıyor…', 'ok', true);
+      location.replace(APP_URL);
+      return;
+    }
+    if (wakeStartedAt !== null && Date.now() - wakeStartedAt > WAKE_TIMEOUT_MS) {
+      wakeStartedAt = null;
+      wakeBtn.disabled = false;
+      setStatus("Uyanmadı. Telefon evdeki Wi-Fi'de mi? Tekrar dene.", 'err', false);
+    }
+    setTimeout(probeLoop, PROBE_MS);
+  }
+
+  wakeBtn.addEventListener('click', () => {
+    if (!window.WakeOnLan) {
+      setStatus('Uyandırma sadece uygulamadan çalışır.', 'err', false);
+      return;
+    }
+    // Synchronous native call (~0.5 s) — returns '' or an error message.
+    const error = window.WakeOnLan.wake(PC_MAC, LAN_BROADCAST);
+    if (error) {
+      setStatus(error, 'err', false);
+      return;
+    }
+    wakeBtn.disabled = true;
+    wakeStartedAt = Date.now();
+    setStatus('Uyandırma sinyali gönderildi, bekleniyor…', '', true);
+  });
+
+  document.getElementById('retry').addEventListener('click', () => location.replace(APP_URL));
+
+  probeLoop();
+</script>
+</body>
+</html>

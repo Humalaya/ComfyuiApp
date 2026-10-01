@@ -5,6 +5,10 @@ import { GenerationPreview } from './GenerationPreview'
 import { ResultCarousel } from './ResultCarousel'
 import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
 import { CollapsibleSection } from './CollapsibleSection'
+import { TagCheatSheet } from './TagCheatSheet'
+import { HelpTip } from './HelpTip'
+import { randomSeed, SeedField } from './SeedField'
+import { modelLabel } from '../utils/modelLabel'
 import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useImageGeneration } from '../hooks/useImageGeneration'
 import { buildImageWorkflow, getDefaultImageSettings, IMAGE_OUTPUT_NODE_ID, QUALITY_PRESETS, type ImageGenerationSettings } from '../workflow/imageFieldMap'
@@ -12,10 +16,6 @@ import { appendTriggerWords } from '../utils/promptText'
 import type { LoraSlot } from '../workflow/fieldMap'
 import { loadImageSettings, normalizeImageSettings, saveImageSettings } from '../storage/imageSettingsStorage'
 import { loadRemoteQueue, saveRemoteQueue } from '../storage/remoteQueueStorage'
-
-function randomSeed() {
-  return Math.floor(Math.random() * 1_000_000_000_000)
-}
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -82,8 +82,8 @@ export function ImageGenerateTab({ importRequest }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    loadRemoteQueue(KIND, normalizeImageSettings).then((loaded) => {
-      if (cancelled) return
+    loadRemoteQueue(KIND, normalizeImageSettings, () => cancelled).then((loaded) => {
+      if (cancelled || loaded === null) return
       setQueue(loaded)
       setQueueLoaded(true)
     })
@@ -106,7 +106,27 @@ export function ImageGenerateTab({ importRequest }: Props) {
   const lastDrainedKey = useRef<string | null>(null)
   useEffect(() => {
     if (!(gen.status === 'done' || gen.status === 'error' || gen.status === 'idle')) return
-    const key = `${gen.status}:${gen.settledCount}`
+    // Wait for the queue's own PC-RAM load to finish before deciding it's
+    // empty — this races gen's own mount-time job recovery (see
+    // useImageGeneration.ts). If that settles first and finds the job
+    // already done, `queue` can still be its initial `[]` at that exact
+    // moment — reading queue.length as "0, nothing to drain" then would
+    // strand every real pending item forever, since queueLoaded flipping
+    // true afterwards was never a dependency this effect re-ran for.
+    // Including it as one now (see the array below) is what makes that late
+    // queue load retry this check.
+    if (!queueLoaded) return
+    // Also wait for gen's OWN mount-time job-recovery check to have actually
+    // run — see App.tsx's identical guard for the full rationale. Without
+    // this, 'idle' (which means EITHER "genuinely nothing running" OR
+    // "recovery hasn't reported back yet") could get read as the former
+    // right before recovery settles a leftover job to 'done' a moment later,
+    // firing this effect twice and starting two queued items whose
+    // generate() calls step on the same shared refs — this is what let
+    // queued Krea2/SDXL jobs vanish without ever reaching ComfyUI after a
+    // background process kill.
+    if (!gen.recoveryChecked) return
+    const key = `${gen.status}:${gen.settledCount}:${queueLoaded}`
     if (lastDrainedKey.current === key) return
     lastDrainedKey.current = key
 
@@ -121,7 +141,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
     setQueue(rest)
     gen.generate(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen.status, gen.settledCount])
+  }, [gen.status, gen.settledCount, queueLoaded, gen.recoveryChecked])
 
   // The template's baked-in default checkpoint file can stop existing (get
   // renamed/removed on disk) without any code change here — this snaps back
@@ -251,39 +271,59 @@ export function ImageGenerateTab({ importRequest }: Props) {
       </div>
 
       <div className="field">
-        <label className="field-label">Negatif Prompt</label>
+        <label className="field-label">
+          Negatif Prompt
+          <HelpTip>
+            Görselde istemediğin şeyler. CFG 0 iken negatif prompt'un hiçbir etkisi olmadığı (classifier-free guidance devre dışı)
+            için kutu kapanır.
+          </HelpTip>
+        </label>
         <textarea
           className="prompt-textarea"
           rows={3}
           value={settings.negativePrompt}
           onChange={(e) => update('negativePrompt', e.target.value)}
-          placeholder="İstemediğin şeyler…"
+          placeholder={settings.cfg === 0 ? 'CFG 0 — kapalı' : 'İstemediğin şeyler…'}
           disabled={settings.cfg === 0}
         />
-        {settings.cfg === 0 && (
-          <span className="field-hint">CFG 0 iken negatif prompt'un hiçbir etkisi olmuyor (classifier-free guidance devre dışı), bu yüzden kapatıldı.</span>
-        )}
       </div>
 
+      <TagCheatSheet
+        prompt={settings.prompt}
+        negativePrompt={settings.negativePrompt}
+        onPromptChange={(prompt) => update('prompt', prompt)}
+        onNegativePromptChange={(negativePrompt) => update('negativePrompt', negativePrompt)}
+      />
+
       <div className="field">
-        <label className="field-label">Quality Prompt</label>
-        <div className="tabs quality-preset-tabs">
+        <label className="field-label">
+          Quality Prompt
+          <HelpTip>
+            Checkpoint ailesine uygun sabit kalite etiketlerini ekler. Prompt kutularında görünmez, sadece üretime gönderilirken
+            eklenir. Seçiliye tekrar dokunmak kapatır.
+            {settings.qualityPreset !== 'none' && (
+              <>
+                <br />
+                <br />
+                <b>+</b> {QUALITY_PRESETS[settings.qualityPreset].positive}
+                <br />
+                <b>−</b> {QUALITY_PRESETS[settings.qualityPreset].negative}
+              </>
+            )}
+          </HelpTip>
+        </label>
+        <div className="seg">
           {(Object.keys(QUALITY_PRESETS) as (keyof typeof QUALITY_PRESETS)[]).map((id) => (
             <button
               key={id}
               type="button"
-              className={settings.qualityPreset === id ? 'tab tab-active' : 'tab'}
+              className={settings.qualityPreset === id ? 'seg-btn seg-btn-active' : 'seg-btn'}
               onClick={() => update('qualityPreset', settings.qualityPreset === id ? 'none' : id)}
             >
               {QUALITY_PRESETS[id].label}
             </button>
           ))}
         </div>
-        <span className="field-hint">
-          {settings.qualityPreset === 'none'
-            ? 'Checkpoint ailesine uygun sabit kalite etiketleri ekler — Prompt/Negatif Prompt kutularında görünmez, sadece üretime gönderilirken eklenir.'
-            : `${QUALITY_PRESETS[settings.qualityPreset].label} kalite etiketleri gönderilirken eklenecek (kutularda görünmez): "${QUALITY_PRESETS[settings.qualityPreset].positive}" / "${QUALITY_PRESETS[settings.qualityPreset].negative}"`}
-        </span>
       </div>
 
       <div className="field-row">
@@ -297,25 +337,12 @@ export function ImageGenerateTab({ importRequest }: Props) {
         </div>
       </div>
 
-      <div className="field">
-        <label className="field-label">Seed</label>
-        <div className="seed-row">
-          <NumberField value={settings.seed} onChange={(v) => update('seed', v)} />
-          <button type="button" className="secondary-button" onClick={() => update('seed', randomSeed())}>
-            🎲 Rastgele
-          </button>
-          <button
-            type="button"
-            className={settings.fixedSeed ? 'switch switch-on seed-fixed-switch' : 'switch seed-fixed-switch'}
-            aria-pressed={settings.fixedSeed}
-            onClick={() => update('fixedSeed', !settings.fixedSeed)}
-            aria-label="Seed'i sabitle"
-          >
-            <span className="switch-knob" />
-          </button>
-        </div>
-        <span className="field-hint">{settings.fixedSeed ? 'Sabit — her üretimde aynı seed kullanılır' : 'Rastgele — her üretimde yeni bir seed seçilir'}</span>
-      </div>
+      <SeedField
+        seed={settings.seed}
+        fixed={settings.fixedSeed}
+        onSeedChange={(v) => update('seed', v)}
+        onFixedChange={(v) => update('fixedSeed', v)}
+      />
 
       <div className="field">
         <label className="field-label">Checkpoint</label>
@@ -323,7 +350,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
           {!objectInfo.checkpointNames.includes(settings.checkpoint) && <option value={settings.checkpoint}>{settings.checkpoint}</option>}
           {objectInfo.checkpointNames.map((name) => (
             <option key={name} value={name}>
-              {name}
+              {modelLabel(name)}
             </option>
           ))}
         </select>
@@ -332,6 +359,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
       <LoraList
         loras={settings.loras}
         loraNames={objectInfo.loraNames}
+        tab="sdxl"
         onChange={updateLora}
         onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
       />
@@ -349,7 +377,13 @@ export function ImageGenerateTab({ importRequest }: Props) {
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Batch Size</label>
+          <label className="field-label">
+            Batch Size
+            <HelpTip>
+              <b>Batch Size:</b> tek işte kaç görsel üretileceği. <b>Batch Count:</b> kaç ayrı işin art arda kuyruğa ekleneceği.
+              İkisi çarpılır — 4 × 3 = 3 iş, her birinde 4 görsel.
+            </HelpTip>
+          </label>
           <NumberField min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
         </div>
         <div className="field">
@@ -357,13 +391,6 @@ export function ImageGenerateTab({ importRequest }: Props) {
           <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
         </div>
       </div>
-      <span className="field-hint">
-        {settings.batchCount > 1
-          ? `${settings.batchCount} ayrı iş art arda kuyruğa eklenecek, her biri ${settings.batchSize} görsel üretecek (toplam ${settings.batchSize * settings.batchCount} görsel).`
-          : settings.batchSize > 1
-            ? `${settings.batchSize} görsel tek seferde üretilecek — sonuç kartında hepsi gösterilir, hepsi Galeri'de de görünür.`
-            : 'Batch Size: tek işte kaç görsel üretilecek. Batch Count: kaç ayrı iş art arda kuyruğa eklenecek.'}
-      </span>
 
       <CollapsibleSection title="Gelişmiş Ayarlar">
         <div className="field">
@@ -397,7 +424,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
       <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
-        {isBusy ? '+ Kuyruğa Ekle' : 'Oluştur'}
+        {isBusy ? '+ Kuyruğa Ekle' : settings.batchSize * settings.batchCount > 1 ? `Oluştur · ${settings.batchSize * settings.batchCount}` : 'Oluştur'}
       </button>
 
       {viewerUrl !== null && (

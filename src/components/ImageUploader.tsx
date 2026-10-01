@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react'
 import { uploadImage, viewUrl } from '../api/comfyClient'
 import type { GenerationSettings } from '../workflow/fieldMap'
+import { HelpTip } from './HelpTip'
 
 type ImageRef = GenerationSettings['inputImage']
 
 interface Props {
   label: string
-  hint: string
+  help: string
   enabled: boolean
   onToggleEnabled: (enabled: boolean) => void
   value: ImageRef
@@ -21,7 +22,7 @@ interface Props {
 // purely about which of these are wired at all — the switch lets you turn
 // one off without losing the picked image, in case you want to A/B the same
 // prompt with and without it.
-export function ImageUploader({ label, hint, enabled, onToggleEnabled, value, onChange }: Props) {
+export function ImageUploader({ label, help, enabled, onToggleEnabled, value, onChange }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -44,7 +45,10 @@ export function ImageUploader({ label, hint, enabled, onToggleEnabled, value, on
   return (
     <div className="field">
       <div className="picture-frame-header">
-        <span className="field-label">{label}</span>
+        <span className="field-label">
+          {label}
+          <HelpTip>{help}</HelpTip>
+        </span>
         <button
           type="button"
           className={enabled ? 'switch switch-on' : 'switch'}
@@ -56,7 +60,7 @@ export function ImageUploader({ label, hint, enabled, onToggleEnabled, value, on
         </button>
       </div>
 
-      {enabled ? (
+      {enabled && (
         <>
           <div className="image-uploader" onClick={() => inputRef.current?.click()}>
             {previewUrl ? (
@@ -83,8 +87,6 @@ export function ImageUploader({ label, hint, enabled, onToggleEnabled, value, on
             </button>
           )}
         </>
-      ) : (
-        <span className="field-hint">{hint}</span>
       )}
     </div>
   )

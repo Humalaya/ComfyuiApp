@@ -65,3 +65,7 @@ export function stopStack(): Promise<{ ok: true }> {
 export function shutdownMachine(): Promise<{ ok: true }> {
   return fetch('/api/system/shutdown', { method: 'POST' }).then((r) => asJson(r))
 }
+
+export function suspendMachine(): Promise<{ ok: true }> {
+  return fetch('/api/system/suspend', { method: 'POST' }).then((r) => asJson(r))
+}
