@@ -126,8 +126,14 @@ export async function getObjectInfo(classType?: string): Promise<Record<string, 
   return asJson(res)
 }
 
-export async function interrupt(): Promise<void> {
-  await fetch(`${API_BASE}/interrupt`, { method: 'POST' })
+// Stops one specific job: drops it from ComfyUI's waiting list if it
+// hasn't started yet, and interrupts it if it's the one running. A bare
+// /interrupt would stop whatever happens to be running — possibly another
+// tab's job.
+export async function cancelPrompt(promptId: string): Promise<void> {
+  const headers = { 'Content-Type': 'application/json' }
+  await fetch(`${API_BASE}/queue`, { method: 'POST', headers, body: JSON.stringify({ delete: [promptId] }) })
+  await fetch(`${API_BASE}/interrupt`, { method: 'POST', headers, body: JSON.stringify({ prompt_id: promptId }) })
 }
 
 export interface HistoryOutputFile {

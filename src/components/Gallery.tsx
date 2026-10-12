@@ -5,6 +5,7 @@ import { extractA1111PositivePrompt, extractShareableMetadataText, parseComfyWor
 import { extractSettingsFromPrompt } from '../workflow/pngImport'
 import { extractImageSettingsFromPrompt } from '../workflow/imagePngImport'
 import { extractKrea2SettingsFromPrompt } from '../workflow/krea2PngImport'
+import { extractAnime2RealSettings, type Anime2RealSettings } from '../workflow/anime2realFieldMap'
 import { uploadImage, type ComfyWorkflow } from '../api/comfyClient'
 import type { GenerationSettings } from '../workflow/fieldMap'
 import type { ImageGenerationSettings } from '../workflow/imageFieldMap'
@@ -26,6 +27,7 @@ export type ImportPayload =
   | { kind: 'video'; settings: Partial<GenerationSettings> }
   | { kind: 'sdxl'; settings: Partial<ImageGenerationSettings> }
   | { kind: 'krea2'; settings: Partial<Krea2GenerationSettings> }
+  | { kind: 'anime2real'; settings: Partial<Anime2RealSettings> }
 
 // Gallery source id -> which Create tab its metadata should populate. Kept
 // as its own map (rather than just reusing the source id as the kind
@@ -91,7 +93,7 @@ export function Gallery({ active, onSendToCreate }: Props) {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [metadata, setMetadata] = useState<MetadataState | null>(null)
   const [metadataLoadingName, setMetadataLoadingName] = useState<string | null>(null)
-  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | null>(null)
+  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | 'anime2real' | null>(null)
   // The subfolder path you just came *up* from, so it can be highlighted in
   // its parent's folder list — a plain "Geri" with no other cue made it easy
   // to lose track of which folder you were just in, especially in a source
@@ -189,7 +191,11 @@ export function Gallery({ active, onSendToCreate }: Props) {
         // workflows share almost no node identities with each other.
         try {
           const workflow = parseComfyWorkflowJson(chunks.prompt) as ComfyWorkflow
-          if (kind === 'video') payload = { kind, settings: extractSettingsFromPrompt(workflow).settings }
+          // Anime2Real results are saved into the Krea folder, so they're
+          // told apart from plain Krea2 images by their workflow.
+          const anime2real = extractAnime2RealSettings(workflow)
+          if (anime2real) payload = { kind: 'anime2real', settings: anime2real }
+          else if (kind === 'video') payload = { kind, settings: extractSettingsFromPrompt(workflow).settings }
           else if (kind === 'sdxl') payload = { kind, settings: extractImageSettingsFromPrompt(workflow).settings }
           else payload = { kind, settings: extractKrea2SettingsFromPrompt(workflow).settings }
         } catch {
@@ -273,6 +279,22 @@ export function Gallery({ active, onSendToCreate }: Props) {
   }
 
   useBackHandler(active && currentPath !== '', goUp)
+
+  // Sends this exact PNG as Anime2Real's input picture (to be turned into a
+  // realistic photo) — independent of whatever settings it carries.
+  async function handleSendToAnime2Real() {
+    if (!metadata?.imageBlob) return
+    setSendingAction('anime2real')
+    try {
+      const inputImage = await uploadCurrentImage()
+      if (inputImage) onSendToCreate({ kind: 'anime2real', settings: { inputImage } })
+      setMetadata(null)
+    } catch (err) {
+      alert(`Görsel gönderilemedi: ${(err as Error).message}`)
+    } finally {
+      setSendingAction(null)
+    }
+  }
 
   const visibleFiles = items.slice(0, visibleCount)
 
@@ -397,6 +419,8 @@ export function Gallery({ active, onSendToCreate }: Props) {
         sendingSettings={sendingAction === 'settings'}
         onSendImageOnly={metadata?.imageBlob ? handleSendImageOnly : undefined}
         sendingImage={sendingAction === 'image'}
+        onSendToAnime2Real={metadata?.imageBlob ? handleSendToAnime2Real : undefined}
+        sendingAnime2Real={sendingAction === 'anime2real'}
       />
     </div>
   )

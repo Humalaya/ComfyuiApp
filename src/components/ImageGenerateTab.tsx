@@ -199,6 +199,9 @@ export function ImageGenerateTab({ importRequest }: Props) {
             <span>Geçen süre</span>
             <span>{gen.elapsedSeconds} sn</span>
           </div>
+          <button type="button" className="generate-button generate-button-cancel" onClick={() => gen.cancel()}>
+            İptal Et
+          </button>
         </div>
       )}
 

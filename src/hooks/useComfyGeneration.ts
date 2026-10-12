@@ -4,7 +4,7 @@ import {
   connectComfySocket,
   extractHistoryErrorMessage,
   getHistory,
-  interrupt,
+  cancelPrompt,
   viewUrl,
   type ComfyConnectionStatus,
   type ComfyWsMessage,
@@ -449,7 +449,7 @@ export function useComfyGeneration() {
   const cancel = useCallback(async () => {
     const promptId = activePromptId.current
     try {
-      await interrupt()
+      if (promptId) await cancelPrompt(promptId)
     } finally {
       if (promptId) endJob(promptId)
       settle({})

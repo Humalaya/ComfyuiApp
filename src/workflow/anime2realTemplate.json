@@ -1,0 +1,275 @@
+{
+  "215": {
+    "inputs": {
+      "unet_name": "Image/finepornV5INT8_v5INT8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "216": {
+    "inputs": {
+      "clip_name": "image/qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "217": {
+    "inputs": {
+      "reference_latents_method": "index_timestep_zero",
+      "conditioning": [
+        "220",
+        0
+      ]
+    },
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "_meta": {
+      "title": "Edit Model Reference Method"
+    }
+  },
+  "218": {
+    "inputs": {
+      "reference_latents_method": "index_timestep_zero",
+      "conditioning": [
+        "220",
+        1
+      ]
+    },
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "_meta": {
+      "title": "Edit Model Reference Method"
+    }
+  },
+  "219": {
+    "inputs": {
+      "kv_cache": true,
+      "model": [
+        "236",
+        0
+      ]
+    },
+    "class_type": "Krea2OstrisEditModelPatch",
+    "_meta": {
+      "title": "Krea 2 Ostris Edit Model Patch"
+    }
+  },
+  "220": {
+    "inputs": {
+      "auto_resize": "crop",
+      "vl_size": 384,
+      "prompt": "transform the image to realistic photograph",
+      "system_prompt": "Describe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.",
+      "clip": [
+        "236",
+        1
+      ],
+      "vae": [
+        "222",
+        0
+      ],
+      "image1": [
+        "238",
+        0
+      ],
+      "latent_image": [
+        "238",
+        0
+      ]
+    },
+    "class_type": "Easy_QwenEdit2509",
+    "_meta": {
+      "title": "Easy_QwenEdit2509"
+    }
+  },
+  "221": {
+    "inputs": {
+      "seed": 300331570013764,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "beta57",
+      "denoise": 1,
+      "model": [
+        "219",
+        0
+      ],
+      "positive": [
+        "217",
+        0
+      ],
+      "negative": [
+        "218",
+        0
+      ],
+      "latent_image": [
+        "220",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "222": {
+    "inputs": {
+      "vae_name": "image/qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "224": {
+    "inputs": {
+      "samples": [
+        "221",
+        0
+      ],
+      "vae": [
+        "222",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "227": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "228": {
+    "inputs": {
+      "filename_prefix": "krea/%year%-%month%-%day%/Anime2Real",
+      "images": [
+        "224",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "236": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "Krea2/PornMaster_Krea2_AnimeToReal_V1.safetensors",
+        "strength": 1
+      },
+      "lora_2": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_3": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_4": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_5": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_6": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_7": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_8": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_9": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "lora_10": {
+        "on": false,
+        "lora": "",
+        "strength": 1
+      },
+      "➕ Add Lora": "",
+      "model": [
+        "215",
+        0
+      ],
+      "clip": [
+        "216",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "237": {
+    "inputs": {
+      "temperature": 0,
+      "hue": 0,
+      "brightness": 0,
+      "contrast": 0,
+      "saturation": -20,
+      "gamma": 1,
+      "image": [
+        "227",
+        0
+      ]
+    },
+    "class_type": "ColorCorrect",
+    "_meta": {
+      "title": "Color Correct"
+    }
+  },
+  "238": {
+    "inputs": {
+      "width": 1536,
+      "height": 1536,
+      "upscale_method": "lanczos",
+      "keep_proportion": "resize",
+      "pad_color": "0, 0, 0",
+      "crop_position": "center",
+      "divisible_by": 16,
+      "device": "cpu",
+      "image": [
+        "237",
+        0
+      ]
+    },
+    "class_type": "ImageResizeKJv2",
+    "_meta": {
+      "title": "Resize Image v2"
+    }
+  }
+}

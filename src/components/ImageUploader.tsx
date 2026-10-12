@@ -8,10 +8,14 @@ type ImageRef = GenerationSettings['inputImage']
 interface Props {
   label: string
   help: string
-  enabled: boolean
-  onToggleEnabled: (enabled: boolean) => void
+  // Omit both for a required picture (Anime2Real's input): no switch, always on.
+  enabled?: boolean
+  onToggleEnabled?: (enabled: boolean) => void
   value: ImageRef
   onChange: (image: ImageRef) => void
+  // Full-width use (Anime2Real): a short box showing the whole picture,
+  // instead of the tall cropped one meant for two side by side.
+  wide?: boolean
 }
 
 // Backs both "Picture 1" (first_frame) and "Picture 2" (last_frame) on the
@@ -22,7 +26,7 @@ interface Props {
 // purely about which of these are wired at all — the switch lets you turn
 // one off without losing the picked image, in case you want to A/B the same
 // prompt with and without it.
-export function ImageUploader({ label, help, enabled, onToggleEnabled, value, onChange }: Props) {
+export function ImageUploader({ label, help, enabled = true, onToggleEnabled, value, onChange, wide = false }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,20 +53,22 @@ export function ImageUploader({ label, help, enabled, onToggleEnabled, value, on
           {label}
           <HelpTip>{help}</HelpTip>
         </span>
-        <button
-          type="button"
-          className={enabled ? 'switch switch-on' : 'switch'}
-          onClick={() => onToggleEnabled(!enabled)}
-          aria-pressed={enabled}
-          aria-label={label}
-        >
-          <span className="switch-knob" />
-        </button>
+        {onToggleEnabled && (
+          <button
+            type="button"
+            className={enabled ? 'switch switch-on' : 'switch'}
+            onClick={() => onToggleEnabled(!enabled)}
+            aria-pressed={enabled}
+            aria-label={label}
+          >
+            <span className="switch-knob" />
+          </button>
+        )}
       </div>
 
       {enabled && (
         <>
-          <div className="image-uploader" onClick={() => inputRef.current?.click()}>
+          <div className={wide ? 'image-uploader image-uploader-wide' : 'image-uploader'} onClick={() => inputRef.current?.click()}>
             {previewUrl ? (
               <img src={previewUrl} alt={label} className="image-preview" />
             ) : (

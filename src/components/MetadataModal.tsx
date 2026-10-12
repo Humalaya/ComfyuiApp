@@ -10,6 +10,9 @@ interface Props {
   sendingSettings?: boolean
   onSendImageOnly?: () => void
   sendingImage?: boolean
+  // Use this PNG as Anime2Real's input picture.
+  onSendToAnime2Real?: () => void
+  sendingAnime2Real?: boolean
 }
 
 // Shows the extracted PNG metadata directly — no download of the image
@@ -23,11 +26,22 @@ interface Props {
 // share sheet when available. The textarea itself is always there as a
 // manual fallback (tap, select-all, copy) since navigator.share/clipboard
 // can be unavailable on this app's plain-http/LAN origin.
-export function MetadataModal({ title, text, onClose, onSendToCreate, sendSettingsLabel, sendingSettings, onSendImageOnly, sendingImage }: Props) {
+export function MetadataModal({
+  title,
+  text,
+  onClose,
+  onSendToCreate,
+  sendSettingsLabel,
+  sendingSettings,
+  onSendImageOnly,
+  sendingImage,
+  onSendToAnime2Real,
+  sendingAnime2Real,
+}: Props) {
   useBackHandler(text !== null, onClose)
   if (text === null) return null
 
-  const busy = !!sendingSettings || !!sendingImage
+  const busy = !!sendingSettings || !!sendingImage || !!sendingAnime2Real
 
   async function handleShare() {
     await shareText(title ?? 'Metadata', text!)
@@ -61,6 +75,11 @@ export function MetadataModal({ title, text, onClose, onSendToCreate, sendSettin
           {onSendImageOnly && (
             <button type="button" className="secondary-button metadata-send-button" onClick={onSendImageOnly} disabled={busy}>
               {sendingImage ? 'Gönderiliyor…' : '🖼️ Sadece Resmi Gönder'}
+            </button>
+          )}
+          {onSendToAnime2Real && (
+            <button type="button" className="secondary-button metadata-send-button" onClick={onSendToAnime2Real} disabled={busy}>
+              {sendingAnime2Real ? 'Gönderiliyor…' : "🎨 Anime2Real'e Gönder"}
             </button>
           )}
         </div>

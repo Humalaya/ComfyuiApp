@@ -10,6 +10,7 @@ import { GenerationFullscreenViewer } from './components/GenerationFullscreenVie
 import { Gallery, type ImportPayload } from './components/Gallery'
 import { ImageGenerateTab } from './components/ImageGenerateTab'
 import { Krea2GenerateTab } from './components/Krea2GenerateTab'
+import { Anime2RealGenerateTab } from './components/Anime2RealGenerateTab'
 import { SettingsTab } from './components/SettingsTab'
 import { UretDrawer, type UretView } from './components/UretDrawer'
 import { OpenWebUiFrame } from './components/OpenWebUiFrame'
@@ -23,6 +24,7 @@ import { useComfyGeneration } from './hooks/useComfyGeneration'
 import { buildWorkflow, getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
 import type { ImageGenerationSettings } from './workflow/imageFieldMap'
 import type { Krea2GenerationSettings } from './workflow/krea2FieldMap'
+import type { Anime2RealSettings } from './workflow/anime2realFieldMap'
 import { loadSettings, normalizeSettings, saveSettings } from './storage/settingsStorage'
 import { useRemoteQueue } from './storage/remoteQueueStorage'
 
@@ -124,11 +126,12 @@ export default function App() {
   // Same lazy-mount-then-keep idea for the Civitai browser — no reason to hit
   // Civitai's API on every app start for someone who never opens it.
   const [civitaiVisited, setCivitaiVisited] = useState(() => loadUretView() === 'civitai')
-  const [imageModel, setImageModel] = useState<'sdxl' | 'krea2'>('sdxl')
+  const [imageModel, setImageModel] = useState<'sdxl' | 'krea2' | 'anime2real'>('sdxl')
   // See PendingImport above — null means "nothing pending", each tab only
   // reacts when `id` actually changes.
   const [imageImportRequest, setImageImportRequest] = useState<PendingImport<ImageGenerationSettings> | null>(null)
   const [krea2ImportRequest, setKrea2ImportRequest] = useState<PendingImport<Krea2GenerationSettings> | null>(null)
+  const [anime2realImportRequest, setAnime2realImportRequest] = useState<PendingImport<Anime2RealSettings> | null>(null)
   // Restores whatever was last saved (prompt, seed, model, LoRAs, input
   // image reference, ...) so a reload — screen lock, OEM background kill,
   // manual refresh — doesn't wipe the form back to scratch. Only a true
@@ -328,9 +331,13 @@ export default function App() {
       setImageImportRequest({ settings: payload.settings, id: Date.now() })
       setImageModel('sdxl')
       goToUret('image')
-    } else {
+    } else if (payload.kind === 'krea2') {
       setKrea2ImportRequest({ settings: payload.settings, id: Date.now() })
       setImageModel('krea2')
+      goToUret('image')
+    } else {
+      setAnime2realImportRequest({ settings: payload.settings, id: Date.now() })
+      setImageModel('anime2real')
       goToUret('image')
     }
   }
@@ -438,6 +445,13 @@ export default function App() {
           <button type="button" className={imageModel === 'krea2' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setImageModel('krea2')}>
             Krea2 (FLUX)
           </button>
+          <button
+            type="button"
+            className={imageModel === 'anime2real' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => setImageModel('anime2real')}
+          >
+            Anime2Real
+          </button>
         </div>
         {/* Both stay mounted for the same reason as the outer tabs — switching
             between model families shouldn't lose an in-progress generation. */}
@@ -446,6 +460,9 @@ export default function App() {
         </div>
         <div style={{ display: imageModel === 'krea2' ? 'block' : 'none' }}>
           <Krea2GenerateTab importRequest={krea2ImportRequest} />
+        </div>
+        <div style={{ display: imageModel === 'anime2real' ? 'block' : 'none' }}>
+          <Anime2RealGenerateTab importRequest={anime2realImportRequest} />
         </div>
       </div>
 

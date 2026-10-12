@@ -382,7 +382,7 @@ async function ensurePlayablePath(filePath, mtimeMs) {
 // app was opened again. The phone now only adds/removes items and follows
 // along. Saved to disk on every change so a panel restart doesn't drop
 // what's waiting.
-const GENERATION_KINDS = ['video', 'sdxl', 'krea2']
+const GENERATION_KINDS = ['video', 'sdxl', 'krea2', 'anime2real']
 const GEN_STATE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cache', 'generation-state.json')
 // Per kind: { promptId, startedAt, titles, nodeCount, done, finishedAt? } | null
 const remoteJobs = Object.fromEntries(GENERATION_KINDS.map((k) => [k, null]))

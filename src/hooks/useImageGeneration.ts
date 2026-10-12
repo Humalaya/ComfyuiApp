@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  cancelPrompt,
   COMFY_BASE_URL,
   connectComfySocket,
   extractHistoryErrorMessage,
@@ -104,7 +105,7 @@ function extractImageFiles(outputs: Record<string, unknown>, outputNodeId: strin
   return nodeOutput.images ?? nodeOutput.gifs ?? nodeOutput.videos ?? []
 }
 
-export function useImageGeneration(outputNodeId: string, kind: 'sdxl' | 'krea2') {
+export function useImageGeneration(outputNodeId: string, kind: 'sdxl' | 'krea2' | 'anime2real') {
   const [state, setState] = useState<ImageGenState>(initialState)
   // Bumped on every terminal transition — lets a caller (each Create tab's
   // "recently finished" list) react to every settle, including two
@@ -324,5 +325,17 @@ export function useImageGeneration(outputNodeId: string, kind: 'sdxl' | 'krea2')
     settle({})
   }, [endJob, settle])
 
-  return { ...state, settledCount, checkRemoteJob, reset }
+  // Stops the running job; the server's dispatcher then moves on to the
+  // next queued one by itself.
+  const cancel = useCallback(async () => {
+    const promptId = activePromptId.current
+    try {
+      if (promptId) await cancelPrompt(promptId)
+    } finally {
+      if (promptId) endJob(promptId)
+      settle({})
+    }
+  }, [endJob, settle])
+
+  return { ...state, settledCount, checkRemoteJob, reset, cancel }
 }
