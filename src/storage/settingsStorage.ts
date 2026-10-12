@@ -41,8 +41,8 @@ function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
 // field by field — anything missing, mistyped, or from an incompatible
 // schema silently falls back to the matching default instead of corrupting
 // the whole form or crashing the app. Exported so App.tsx can hand this to
-// remoteQueueStorage.ts's loadRemoteQueue, applying the exact same
-// validation to each item of a persisted queue as a normal settings load gets.
+// remoteQueueStorage.ts's useRemoteQueue, applying the exact same
+// validation to each queued item as a normal settings load gets.
 export function normalizeSettings(raw: unknown, defaults: GenerationSettings = getDefaultSettings()): GenerationSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const r = raw as Partial<GenerationSettings>

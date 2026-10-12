@@ -20,11 +20,11 @@ import { exitApp, useRootBackHandler } from './native/backButton'
 import { modelLabel } from './utils/modelLabel'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
-import { getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
+import { buildWorkflow, getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
 import type { ImageGenerationSettings } from './workflow/imageFieldMap'
 import type { Krea2GenerationSettings } from './workflow/krea2FieldMap'
 import { loadSettings, normalizeSettings, saveSettings } from './storage/settingsStorage'
-import { loadRemoteQueue, saveRemoteQueue } from './storage/remoteQueueStorage'
+import { useRemoteQueue } from './storage/remoteQueueStorage'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -137,21 +137,10 @@ export default function App() {
   // something is saved, the seed is whatever the user left it at, same as
   // every other field.
   const [settings, setSettings] = useState<GenerationSettings>(() => loadSettings() ?? { ...getDefaultSettings(), seed: randomSeed() })
-  // Restored from the output-server's PC-RAM store on mount (see
-  // remoteQueueStorage.ts) for the exact reason remoteJobStorage.ts exists
-  // for the *active* job: a page reload mid-batch (screen lock, OEM
-  // background kill, manual refresh, or just closing the phone entirely) used
-  // to wipe this array outright, since it only ever lived in the phone's own
-  // storage — which is exactly what silently ate an overnight queue of ~15
-  // videos down to just the first one or two. Starts empty and is populated
-  // by the mount effect below rather than a lazy useState initializer, since
-  // loading it is now an async fetch instead of a synchronous localStorage read.
-  const [queue, setQueue] = useState<GenerationSettings[]>([])
-  // Guards the save-on-change effect below from firing with this empty
-  // initial `queue` before the load above has actually resolved — without
-  // it, every fresh mount would immediately PUT `[]` to the server and wipe
-  // out a real queue that was sitting there the whole time.
-  const [queueLoaded, setQueueLoaded] = useState(false)
+  // Jobs waiting to run — held *and run* by the PC's output-server (see
+  // remoteQueueStorage.ts), so the queue keeps going while the phone is
+  // locked or the app is closed.
+  const { queue, comfyUp, queueError, append, remove, dismissError } = useRemoteQueue(QUEUE_KIND, normalizeSettings)
   // Recently-finished results, most recent first — kept here (separate from
   // the single active `gen.result`) specifically so that when the queue
   // drain effect below immediately moves on to the next job, the just-shown
@@ -168,15 +157,10 @@ export default function App() {
   // different, newer item the moment that happened. The url stays valid
   // regardless of how the array shifts around it.
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
-  // Set when the queue stops itself after a *pre-flight* failure (ComfyUI
-  // never even accepted the prompt — almost always means it's unreachable,
-  // not that this specific job was bad) instead of continuing to drain. See
-  // the effect below for why blindly continuing would be worse than pausing.
-  const [queuePaused, setQueuePaused] = useState(false)
   const objectInfo = useObjectInfo()
   const gen = useComfyGeneration()
 
-  const isBusy = gen.status === 'queued' || gen.status === 'running' || (queuePaused && queue.length > 0)
+  const isBusy = gen.status === 'queued' || gen.status === 'running' || queue.length > 0
 
   // Measured (rather than guessed/hardcoded) so the Galeri tab's sticky
   // breadcrumb/back button can dock its `top` exactly at the bottom of this
@@ -298,127 +282,18 @@ export default function App() {
     setTab('uret')
   }
 
+  // Collects each finished result into the "recently finished" strip. The
+  // queue itself advances on the server, not here.
+  const lastCollected = useRef(0)
   useEffect(() => {
-    let cancelled = false
-    loadRemoteQueue(QUEUE_KIND, normalizeSettings, () => cancelled).then((loaded) => {
-      if (cancelled || loaded === null) return
-      setQueue(loaded)
-      setQueueLoaded(true)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!queueLoaded) return
-    saveRemoteQueue(QUEUE_KIND, queue)
-  }, [queue, queueLoaded])
-
-  function startNextInQueue() {
-    if (queue.length === 0) return
-    const [next, ...rest] = queue
-    setQueue(rest)
-    setQueuePaused(false)
-    gen.generate(next)
-  }
-
-  // Drains the queue one item at a time: the moment the active generation
-  // reaches a terminal state — done, errored, or manually cancelled (which
-  // also lands on 'idle') — immediately start the next queued job. The
-  // just-finished result isn't lost when this happens (see completedResults
-  // above), and this just means the on-screen status panel moves on instead
-  // of sitting idle. Cancelling one queued job this way skips it and moves on
-  // rather than getting the whole queue stuck (there'd be no other trigger to
-  // drain it afterwards).
-  //
-  // Watches gen.settledCount *in addition to* gen.status on purpose: two
-  // queued jobs failing back-to-back both land on 'error', which alone is
-  // not a value *change* React re-fires an effect for — without the counter,
-  // the second failure wouldn't advance the queue at all and the rest would
-  // just sit there forever.
-  //
-  // lastDrainedKey guards against React StrictMode's documented double-
-  // invocation of an effect right after it first mounts (setup → cleanup →
-  // setup again, to help surface missing-cleanup bugs) — which this app
-  // genuinely runs under in production, not just local dev tooling (see
-  // main.tsx). Without the guard, a persisted queue with pending items and
-  // no active job (nothing running right after a reload) would have this
-  // effect's very first mount-time invocation fire twice, starting two
-  // queued jobs at once instead of one.
-  const lastDrainedKey = useRef<string | null>(null)
-  useEffect(() => {
-    if (!(gen.status === 'done' || gen.status === 'error' || gen.status === 'idle')) return
-    // Wait for the queue's own PC-RAM load to finish before deciding it's
-    // empty — this effect's OWN mount-time recovery (loadRemoteJob, above)
-    // races the queue's (loadRemoteQueue). If the active job's recovery
-    // settles first and finds it already done, `queue` can still be its
-    // initial `[]` at that exact moment — reading queue.length here as "0,
-    // nothing to drain" then would strand every real pending item forever,
-    // since queueLoaded flipping true afterwards was never a dependency this
-    // effect re-ran for. Including it as one now (see the array below) is
-    // what makes that late queue load itself retry this check.
-    if (!queueLoaded) return
-    // Also wait for gen's OWN mount-time job-recovery check to have actually
-    // run (found something or not) before ever trusting an 'idle' status —
-    // 'idle' means EITHER "genuinely nothing running" OR "recovery hasn't
-    // reported back yet", and those look identical from status alone. Acting
-    // on the second one — drain the queue "since nothing's running" — right
-    // before recovery settles its own leftover job to 'done' a moment later
-    // fires this effect a second time too, both moments start a different
-    // queued item, and the two generate() calls step on the same shared
-    // activePromptId/tickInterval/pollInterval refs. Whichever loses that
-    // race never gets its submission tracked — its job can genuinely reach
-    // ComfyUI with nothing here left watching for it, which is what let
-    // queued items disappear after a background process kill without ever
-    // finishing (or with no record of them finishing).
-    if (!gen.recoveryChecked) return
-    const key = `${gen.status}:${gen.settledCount}:${queueLoaded}`
-    if (lastDrainedKey.current === key) return
-    lastDrainedKey.current = key
-
+    if (gen.settledCount === lastCollected.current) return
+    lastCollected.current = gen.settledCount
     if (gen.status === 'done' && gen.result) {
       const { promptId, urls, createdAt } = gen.result
       const items: CompletedItem[] = urls.map((url) => ({ promptId, url, createdAt }))
       setCompletedResults((list) => [...items, ...list].slice(0, MAX_COMPLETED_RESULTS))
     }
-
-    if (queue.length === 0) return
-
-    if (gen.status === 'error' && gen.preflightFailure) {
-      // ComfyUI itself is almost certainly unreachable — starting the next
-      // item would just fail the exact same way, and doing that 14 more
-      // times in a row would burn through an entire overnight queue in a
-      // few seconds with nothing to show for it. Stop and wait for either a
-      // manual retry or the app being reopened (see the visibility effect
-      // below), instead.
-      setQueuePaused(true)
-      return
-    }
-
-    startNextInQueue()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen.status, gen.settledCount, queueLoaded, gen.recoveryChecked])
-
-  // One retry attempt whenever the app is reopened/foregrounded while the
-  // queue is paused — covers exactly the "left it overnight, ComfyUI (or the
-  // PC) was down for a while, came back before I checked in the morning"
-  // case, without looping retries while still definitely unreachable.
-  useEffect(() => {
-    function onVisible() {
-      const genIdle = gen.status !== 'queued' && gen.status !== 'running'
-      if (document.visibilityState === 'visible' && queuePaused && queue.length > 0 && genIdle) {
-        startNextInQueue()
-      }
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-    // Re-registered (cheap) whenever any of these change, specifically so the
-    // closure over `queue`/`gen.status` can't go stale between a pause and
-    // whenever the user next foregrounds the app — e.g. removing a queued
-    // item while paused, without this, would resume against the old queue.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queuePaused, queue, gen.status])
+  }, [gen.settledCount, gen.status, gen.result])
 
   // A persisted unetName can go stale in a way that still *looks* fine in
   // the dropdown — e.g. this app's own model-folder reorganization earlier
@@ -479,7 +354,9 @@ export default function App() {
   // img2vid. Same workflow either way, this is purely a UI-level choice.
   const canGenerate = settings.prompt.trim().length > 0
 
-  function handleGenerate() {
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleGenerate() {
     // ComfyUI's "easy seed" node has no server-side randomize behavior of its
     // own — it just uses whatever seed value it's given. So unless the user
     // pinned it, a fresh seed is picked here, right before submitting, and
@@ -495,17 +372,17 @@ export default function App() {
       items.push(settings.fixedSeed ? settings : { ...settings, seed: randomSeed() })
     }
     if (!settings.fixedSeed) setSettings((s) => ({ ...s, seed: items[items.length - 1].seed }))
-    if (isBusy) {
-      setQueue((q) => [...q, ...items])
-    } else {
-      const [first, ...rest] = items
-      gen.generate(first)
-      if (rest.length > 0) setQueue((q) => [...q, ...rest])
+    setSubmitting(true)
+    try {
+      // Built here (the app owns the workflow templates); the server only
+      // runs them, one at a time, starting right away if ComfyUI is idle.
+      await append(items.map((s) => ({ settings: s, workflow: buildWorkflow(s) })))
+      gen.checkRemoteJob()
+    } catch (err) {
+      alert(`Kuyruğa eklenemedi: ${(err as Error).message}`)
+    } finally {
+      setSubmitting(false)
     }
-  }
-
-  function removeFromQueue(index: number) {
-    setQueue((q) => q.filter((_, i) => i !== index))
   }
 
   // Shared by StatusPanel's thumbnail strips (both the compact one shown
@@ -584,23 +461,25 @@ export default function App() {
         {/* Output first, form fields below — so the current job's progress
             or result is visible the moment this tab opens, without scrolling
             past the whole form to find out whether anything even finished. */}
+        {queueError && (
+          <div className="status-warning">
+            {queueError.message}
+            <button type="button" className="secondary-button" onClick={dismissError}>
+              Tamam
+            </button>
+          </div>
+        )}
+
         {queue.length > 0 && (
           <div className="queue-panel">
             <div className="queue-title">Kuyrukta {queue.length} iş bekliyor</div>
-            {queuePaused && (
-              <div className="status-warning">
-                ⚠ ComfyUI'ye ulaşılamadığı için kuyruk duraklatıldı.
-                <button type="button" className="secondary-button" onClick={startNextInQueue}>
-                  Devam Et
-                </button>
-              </div>
-            )}
-            {queue.map((item, i) => (
-              <div className="queue-item" key={i}>
+            {!comfyUp && <div className="status-warning">⚠ ComfyUI'ye ulaşılamıyor — ulaşılınca kuyruk kendiliğinden devam edecek.</div>}
+            {queue.map((entry, i) => (
+              <div className="queue-item" key={entry.id}>
                 <span className="queue-item-label">
-                  {i + 1}. {item.prompt.trim() || '(prompt yok)'}
+                  {i + 1}. {entry.settings.prompt.trim() || '(prompt yok)'}
                 </span>
-                <button type="button" className="queue-item-remove" onClick={() => removeFromQueue(i)} aria-label="Kuyruktan çıkar">
+                <button type="button" className="queue-item-remove" onClick={() => remove(entry.id)} aria-label="Kuyruktan çıkar">
                   ✕
                 </button>
               </div>
@@ -770,7 +649,7 @@ export default function App() {
 
         {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
-        <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
+        <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
           {isBusy ? '+ Kuyruğa Ekle' : settings.batchCount > 1 ? `Oluştur · ${settings.batchCount}` : 'Oluştur'}
         </button>
       </main>

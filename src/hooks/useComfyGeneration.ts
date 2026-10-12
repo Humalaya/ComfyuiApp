@@ -5,23 +5,21 @@ import {
   extractHistoryErrorMessage,
   getHistory,
   interrupt,
-  queuePrompt,
   viewUrl,
   type ComfyConnectionStatus,
-  type ComfyWorkflow,
   type ComfyWsMessage,
   type HistoryEntry,
   type HistoryOutputFile,
 } from '../api/comfyClient'
-import { buildWorkflow, VIDEO_OUTPUT_NODE_ID, type GenerationSettings } from '../workflow/fieldMap'
+import { VIDEO_OUTPUT_NODE_ID } from '../workflow/fieldMap'
 // Routed through the coordinator (not keepAlive.ts directly) — Video, SDXL
 // and Krea2 can all have a job running at once, and the native service is a
 // single shared resource; see keepAliveCoordinator.ts for why a plain
 // start()/stop() per hook would let one tab's completion kill another's
 // still-running background protection.
-import { holdKeepAlive, releaseKeepAlive, updateKeepAlive } from '../native/keepAliveCoordinator'
+import { holdKeepAlive, releaseKeepAlive } from '../native/keepAliveCoordinator'
 import { notify } from '../native/notifications'
-import { clearRemoteJob, loadRemoteJob, saveRemoteJob } from '../storage/remoteJobStorage'
+import { clearRemoteJob, loadRemoteJob, type RemoteJob } from '../storage/remoteJobStorage'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteJobStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -79,13 +77,6 @@ interface GenerationState {
   // "reconnecting" message instead until either a live WS update arrives or
   // the /history poll finds it already finished.
   recovering: boolean
-  // True only for an 'error' that happened before ComfyUI ever accepted the
-  // prompt (queuePrompt() itself threw — most often because ComfyUI is
-  // unreachable, not because this specific job was invalid). App.tsx's queue
-  // uses this to tell "ComfyUI is down, stop burning through the rest of an
-  // unattended batch instantly" apart from "this one job failed for its own
-  // reason, the rest are probably fine, keep going."
-  preflightFailure: boolean
 }
 
 const initialState: GenerationState = {
@@ -103,7 +94,6 @@ const initialState: GenerationState = {
   result: null,
   connectionLost: false,
   recovering: false,
-  preflightFailure: false,
 }
 
 // How many consecutive failed /history polls (5s apart, see HISTORY_POLL_MS)
@@ -119,6 +109,18 @@ const CONNECTION_LOST_THRESHOLD = 3
 // interval polls ComfyUI's own /history as a safety net so completion is
 // always eventually detected even if every WS message was missed.
 const HISTORY_POLL_MS = 5000
+
+// How often to ask the output-server whether it has started a job for this
+// kind while nothing is being followed here. Jobs are submitted by the
+// server's own queue dispatcher (server/index.js), never by this hook — so
+// the app picks up queued jobs even after having been backgrounded or
+// closed while the server worked through the queue.
+const FOLLOW_MS = 2500
+
+// A job older than this when first picked up was already running before we
+// were watching: its early progress messages were missed, so the UI shows a
+// neutral "reconnecting" state rather than a misleading 0% bar.
+const FRESH_JOB_MS = 15000
 
 function extractVideoFiles(outputs: Record<string, unknown>): HistoryOutputFile[] {
   const nodeOutput = outputs[VIDEO_OUTPUT_NODE_ID] as Record<string, HistoryOutputFile[]> | undefined
@@ -153,19 +155,6 @@ export function useComfyGeneration() {
   // stop advancing. This counter changes every single time, so watching it
   // alongside `status` can't miss one.
   const [settledCount, setSettledCount] = useState(0)
-  // False until the mount-time job-recovery check below has actually run
-  // (whether or not it found anything). A caller (App.tsx's queue-drain
-  // effect) can't tell "genuinely idle, nothing was ever running" apart from
-  // "idle because recovery hasn't reported back yet" just from `status`
-  // alone — both look identical (status === 'idle'). Racing that ambiguity
-  // against the queue's own separate PC-RAM load (loadRemoteQueue in
-  // App.tsx) used to let the queue-drain effect fire on a false "idle" *before*
-  // this hook's own recovery settled a leftover job to 'done' a moment later
-  // — two overlapping generate() calls for two different queued items, both
-  // stepping on the same activePromptId/tickInterval/pollInterval refs, with
-  // one of them silently losing track of its own submission. Gating the
-  // drain on this flag (not just on queueLoaded) closes that window.
-  const [recoveryChecked, setRecoveryChecked] = useState(false)
 
   const settle = useCallback((patch: Partial<GenerationState>) => {
     setState({ ...initialState, ...patch })
@@ -184,6 +173,9 @@ export function useComfyGeneration() {
   // keepAliveCoordinator.ts. Non-null for exactly as long as a job of ours
   // is in flight (generate()/recovery through finish/fail/reset/cancel).
   const keepAliveToken = useRef<symbol | null>(null)
+  // The last job this hook finished showing — the server keeps reporting it
+  // until our clear reaches it, and it must not be picked up a second time.
+  const lastSettledPromptId = useRef<string | null>(null)
 
   const stopTicking = useCallback(() => {
     if (tickInterval.current !== null) {
@@ -198,17 +190,26 @@ export function useComfyGeneration() {
 
   useEffect(() => stopTicking, [stopTicking])
 
+  // Common teardown for every way a followed job ends.
+  const endJob = useCallback(
+    (promptId: string) => {
+      activePromptId.current = null
+      lastSettledPromptId.current = promptId
+      stopTicking()
+      releaseKeepAlive(keepAliveToken.current)
+      keepAliveToken.current = null
+      clearRemoteJob(KIND, promptId)
+    },
+    [stopTicking],
+  )
+
   // Shared by the WS "finished" event and the /history poll fallback below —
   // whichever notices completion first wins; the guard on activePromptId
   // stops the other from double-processing the same result.
   const finishFromHistory = useCallback(
     (promptId: string, entry: HistoryEntry) => {
       if (activePromptId.current !== promptId) return
-      activePromptId.current = null
-      stopTicking()
-      releaseKeepAlive(keepAliveToken.current)
-      keepAliveToken.current = null
-      clearRemoteJob(KIND)
+      endJob(promptId)
       const elapsedSeconds = startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : 0
       const files = extractVideoFiles(entry.outputs)
       if (files.length > 0) {
@@ -224,7 +225,7 @@ export function useComfyGeneration() {
         notify('✗ Üretim hatası', error)
       }
     },
-    [settle, stopTicking],
+    [settle, endJob],
   )
 
   // A node throwing mid-execution never makes ComfyUI set completed: true —
@@ -239,16 +240,12 @@ export function useComfyGeneration() {
   const failFromHistory = useCallback(
     (promptId: string, entry: HistoryEntry) => {
       if (activePromptId.current !== promptId) return
-      activePromptId.current = null
-      stopTicking()
-      releaseKeepAlive(keepAliveToken.current)
-      keepAliveToken.current = null
-      clearRemoteJob(KIND)
+      endJob(promptId)
       const error = extractHistoryErrorMessage(entry)
       settle({ status: 'error', error })
       notify('✗ Üretim hatası', error)
     },
-    [settle, stopTicking],
+    [settle, endJob],
   )
 
   const pollHistoryOnce = useCallback(
@@ -325,22 +322,14 @@ export function useComfyGeneration() {
                   finishFromHistory(promptId, entry)
                 } else {
                   const error = 'Çıktı bulunamadı (workflow beklenmedik şekilde sonuçlandı).'
-                  activePromptId.current = null
-                  stopTicking()
-                  releaseKeepAlive(keepAliveToken.current)
-                  keepAliveToken.current = null
-                  clearRemoteJob(KIND)
+                  endJob(promptId)
                   settle({ status: 'error', error })
                   notify('✗ Üretim hatası', error)
                 }
               })
               .catch((err) => {
                 const error = (err as Error).message
-                activePromptId.current = null
-                stopTicking()
-                releaseKeepAlive(keepAliveToken.current)
-                keepAliveToken.current = null
-                clearRemoteJob(KIND)
+                endJob(promptId)
                 settle({ status: 'error', error })
                 notify('✗ Üretim hatası', error)
               })
@@ -367,11 +356,7 @@ export function useComfyGeneration() {
           setState((s) => (s.currentNodeId !== null ? { ...s, previewUrl: msg.data.url } : s))
         } else if (msg.type === 'execution_error' && msg.data.prompt_id === promptId) {
           const error = msg.data.exception_message ?? 'ComfyUI çalıştırma hatası'
-          activePromptId.current = null
-          stopTicking()
-          releaseKeepAlive(keepAliveToken.current)
-          keepAliveToken.current = null
-          clearRemoteJob(KIND)
+          endJob(promptId)
           settle({ status: 'error', error })
           notify('✗ Üretim hatası', error)
         }
@@ -379,129 +364,29 @@ export function useComfyGeneration() {
       (status) => setWsStatus(status),
     )
     return disconnect
-  }, [stopTicking, finishFromHistory, settle])
+  }, [endJob, finishFromHistory, settle])
 
-  const generate = useCallback(
-    async (settings: GenerationSettings) => {
-      let workflow: ComfyWorkflow
-      try {
-        workflow = buildWorkflow(settings)
-      } catch (err) {
-        settle({ status: 'error', error: (err as Error).message })
-        return
-      }
-
-      nodeTitles.current = Object.fromEntries(Object.entries(workflow).map(([id, node]) => [id, node._meta?.title || node.class_type]))
-      executedNodeIds.current = new Set()
-      samplingPhaseStart.current = null
-      startTime.current = Date.now()
-      consecutivePollFailures.current = 0
-
-      setState({ ...initialState, status: 'queued', totalNodeCount: Object.keys(workflow).length })
-      keepAliveToken.current = holdKeepAlive()
-
-      stopTicking()
-      tickInterval.current = setInterval(() => {
-        setState((s) => {
-          if (s.status !== 'queued' && s.status !== 'running') return s
-          return {
-            ...s,
-            elapsedSeconds: startTime.current !== null ? Math.round((Date.now() - startTime.current) / 1000) : s.elapsedSeconds,
-            eta: computeEta(s.samplingProgress, samplingPhaseStart.current),
-          }
-        })
-      }, 1000)
-
-      try {
-        const res = await queuePrompt(workflow)
-        if (res.node_errors && Object.keys(res.node_errors).length > 0) {
-          throw new Error('Workflow doğrulama hatası: ' + JSON.stringify(res.node_errors))
-        }
-        activePromptId.current = res.prompt_id
-        // So a page reload (screen lock, OEM background kill, manual
-        // refresh) can recover this generation instead of losing track of it
-        // entirely — see the mount-time recovery effect below.
-        saveRemoteJob(KIND, res.prompt_id, startTime.current ?? Date.now())
-        // Re-point the keep-alive service's poll/notify target now that the
-        // prompt id is known, so its native poll loop can track this
-        // specific generation and still notify even if the WebView gets
-        // frozen while backgrounded. Doesn't touch the hold from above.
-        updateKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: res.prompt_id, videoNodeId: VIDEO_OUTPUT_NODE_ID })
-        pollInterval.current = setInterval(() => {
-          if (activePromptId.current) pollHistoryOnce(activePromptId.current)
-        }, HISTORY_POLL_MS)
-      } catch (err) {
-        stopTicking()
-        releaseKeepAlive(keepAliveToken.current)
-        keepAliveToken.current = null
-        // activePromptId.current was never set in this branch — ComfyUI
-        // never got this prompt at all (most likely it's unreachable).
-        settle({ status: 'error', error: (err as Error).message, preflightFailure: true })
-      }
-    },
-    [stopTicking, pollHistoryOnce, settle],
-  )
-
-  const reset = useCallback(() => {
-    stopTicking()
-    releaseKeepAlive(keepAliveToken.current)
-    keepAliveToken.current = null
-    clearRemoteJob(KIND)
-    activePromptId.current = null
-    settle({})
-  }, [stopTicking, settle])
-
-  const cancel = useCallback(async () => {
-    try {
-      await interrupt()
-    } finally {
-      stopTicking()
-      releaseKeepAlive(keepAliveToken.current)
-      keepAliveToken.current = null
-      clearRemoteJob(KIND)
-      activePromptId.current = null
-      settle({})
-    }
-  }, [stopTicking, settle])
-
-  // Recovers a generation that was still running when the page was torn
-  // down — screen lock, OEM background kill, or a manual refresh can all
-  // wipe every bit of in-memory state (including the WS connection and
-  // these very refs) without the generation on ComfyUI's side stopping.
-  // Without this, reopening the app after that showed 'idle' with no way to
-  // find out the job ever existed, let alone whether it finished.
-  //
-  // There's no fine-grained progress to restore (that only ever lived in
-  // memory), so this intentionally does not fabricate a node count or
-  // percentage — `recovering: true` tells the UI to show a neutral
-  // "reconnecting" message instead of a misleading 0% bar until either a
-  // live WS update arrives for this prompt id or the immediate /history
-  // check below resolves it outright.
-  useEffect(() => {
-    // Guards against a job resolving into a *cancelled* effect instance —
-    // this fetch is genuinely async now (it wasn't when this read straight
-    // from localStorage), so StrictMode's mount→cleanup→mount can otherwise
-    // have the *first* instance's promise resolve after its own cleanup
-    // already ran, setting up a second, duplicate set of intervals on top of
-    // the second (legitimate) instance's.
-    let cancelled = false
-
-    loadRemoteJob(KIND).then((job) => {
-      if (cancelled) return
-      setRecoveryChecked(true)
-      if (!job) return
-
+  // Starts following a job the output-server submitted (or one already
+  // running when the app was opened): progress via the shared WebSocket,
+  // completion via /history polling, background notification via KeepAlive.
+  const attach = useCallback(
+    (job: RemoteJob) => {
+      const fresh = Date.now() - job.startedAt < FRESH_JOB_MS
       activePromptId.current = job.promptId
       startTime.current = job.startedAt
+      nodeTitles.current = job.titles ?? {}
+      executedNodeIds.current = new Set()
+      samplingPhaseStart.current = null
       consecutivePollFailures.current = 0
 
       setState({
         ...initialState,
-        status: 'running',
-        recovering: true,
+        status: fresh ? 'queued' : 'running',
+        recovering: !fresh,
+        totalNodeCount: job.nodeCount,
         elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)),
       })
-      // Fresh hold — nothing was held yet in this brand-new hook instance.
+      releaseKeepAlive(keepAliveToken.current)
       keepAliveToken.current = holdKeepAlive({ comfyBaseUrl: COMFY_BASE_URL, promptId: job.promptId, videoNodeId: VIDEO_OUTPUT_NODE_ID })
 
       stopTicking()
@@ -518,30 +403,58 @@ export function useComfyGeneration() {
       pollInterval.current = setInterval(() => {
         if (activePromptId.current) pollHistoryOnce(activePromptId.current)
       }, HISTORY_POLL_MS)
-
-      // Resolve immediately instead of waiting up to HISTORY_POLL_MS — the
-      // job may well have already finished while the page was gone.
+      // It may well have finished already (e.g. while the app was closed).
       pollHistoryOnce(job.promptId)
-    })
+    },
+    [stopTicking, pollHistoryOnce],
+  )
 
-    // Returning this cleanup isn't just tidiness: React StrictMode (which
-    // this app genuinely runs under in production too, not just local dev
-    // tooling — see main.tsx) deliberately double-invokes an effect's first
-    // mount (setup → cleanup → setup again) to catch exactly this kind of
-    // bug. Without it, that second setup could overwrite tickInterval/
-    // pollInterval with fresh timers while the first pair kept running
-    // unreferenced forever — two ticking intervals and two /history pollers
-    // for the same recovered job. With it (plus the `cancelled` guard
-    // above), the sequence nets out to exactly one of each, same as it
-    // would without StrictMode.
+  // Asks the server whether it is on a job we aren't following yet. Called
+  // on a timer, on returning to the app, and right after queuing something.
+  const checking = useRef(false)
+  const checkRemoteJob = useCallback(async () => {
+    if (activePromptId.current || checking.current) return
+    checking.current = true
+    try {
+      const job = await loadRemoteJob(KIND)
+      if (job && !activePromptId.current && job.promptId !== lastSettledPromptId.current) attach(job)
+    } finally {
+      checking.current = false
+    }
+  }, [attach])
+
+  useEffect(() => {
+    checkRemoteJob()
+    const timer = setInterval(checkRemoteJob, FOLLOW_MS)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') checkRemoteJob()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    // The cleanup matters under StrictMode (which this app runs in, see
+    // main.tsx): its mount → cleanup → mount must not leave a second timer.
     return () => {
-      cancelled = true
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
       stopTicking()
     }
-    // Mount-only by design (recovery happens once, right after the hook is
-    // first used) — pollHistoryOnce/stopTicking are stable useCallbacks.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [checkRemoteJob, stopTicking])
 
-  return { ...state, wsStatus, settledCount, recoveryChecked, generate, reset, cancel }
+  const reset = useCallback(() => {
+    if (activePromptId.current) endJob(activePromptId.current)
+    settle({})
+  }, [endJob, settle])
+
+  // Stops the running job; the server's dispatcher then moves on to the
+  // next queued one by itself.
+  const cancel = useCallback(async () => {
+    const promptId = activePromptId.current
+    try {
+      await interrupt()
+    } finally {
+      if (promptId) endJob(promptId)
+      settle({})
+    }
+  }, [endJob, settle])
+
+  return { ...state, wsStatus, settledCount, checkRemoteJob, reset, cancel }
 }

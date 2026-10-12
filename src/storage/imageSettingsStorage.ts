@@ -30,8 +30,8 @@ function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
 }
 
 // Exported so ImageGenerateTab.tsx can hand this to remoteQueueStorage.ts's
-// loadRemoteQueue, applying the exact same validation to each item of a
-// persisted queue as a normal settings load gets.
+// useRemoteQueue, applying the exact same validation to each queued item as
+// a normal settings load gets.
 export function normalizeImageSettings(raw: unknown, defaults: ImageGenerationSettings = getDefaultImageSettings()): ImageGenerationSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const r = raw as Partial<ImageGenerationSettings>

@@ -183,7 +183,9 @@ export function SettingsTab({ active }: Props) {
             haber verir (Tailscale açıkken her yerden çalışır). ComfyUI'de iş varken uyutmaz.
             <br />
             <br />
-            <b>Kapat:</b> her şeyi kapatır — ComfyUI, bu panel ve llama-swap dahil.
+            <b>Kapat:</b> her şeyi kapatır — ComfyUI, bu panel ve llama-swap dahil. Sonraki açılış bir kereliğine Linux olur (telefondan
+            uyandırınca Linux gelsin diye); güç düğmesiyle normal açılışlarda varsayılan yine Windows. Açılınca ComfyUI'yi buradan başlatman
+            gerekir.
           </HelpTip>
         </div>
         {powerError && <div className="field-error">{powerError}</div>}

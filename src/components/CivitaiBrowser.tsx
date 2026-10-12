@@ -21,19 +21,25 @@ interface Props {
   onSendToCreate: (payload: ImportPayload) => void
 }
 
-// Civitai "baseModel" names, as the API spells them.
+// Civitai "baseModel" names, as the API spells them. Several can be picked
+// at once; none picked means all. The video list is the five most posted
+// video models (counted 2026-10, videos in one week: LTXV 2.3 and MiniMax H3
+// 1000+, Wan 2.2 I2V-A14B ~530, Wan 3.0 ~290, Seedance ~245).
 const BASE_MODELS: Record<'image' | 'video', { label: string; value: string }[]> = {
   image: [
-    { label: 'Tümü', value: '' },
     { label: 'Illustrious', value: 'Illustrious' },
     { label: 'Pony', value: 'Pony' },
     { label: 'NoobAI', value: 'NoobAI' },
+    { label: 'Anima', value: 'Anima' },
     { label: 'SDXL', value: 'SDXL 1.0' },
     { label: 'Krea 2', value: 'Krea 2' },
   ],
   video: [
-    { label: 'Tümü', value: '' },
     { label: 'MiniMax H3', value: 'MiniMax H3' },
+    { label: 'LTXV 2.3', value: 'LTXV 2.3' },
+    { label: 'Wan 2.2', value: 'Wan Video 2.2 I2V-A14B' },
+    { label: 'Wan 3.0', value: 'Wan Video 3.0' },
+    { label: 'Seedance', value: 'Seedance' },
   ],
 }
 
@@ -52,14 +58,18 @@ const SEND_TARGETS: { kind: ImportKind; label: string }[] = [
 ]
 
 const QUERY_KEY = 'civitai-query'
-const DEFAULT_QUERY: CivitaiQuery = { type: 'image', sort: 'Most Reactions', period: 'Week', baseModels: '', withMeta: true, nsfwOnly: false }
+const DEFAULT_QUERY: CivitaiQuery = { type: 'image', sort: 'Most Reactions', period: 'Week', baseModels: [], withMeta: true, nsfwOnly: false }
 
 // The filters are remembered per device — reopening the view shouldn't reset
 // NSFW / model choices every time.
 function loadQuery(): CivitaiQuery {
   try {
     const saved = JSON.parse(localStorage.getItem(QUERY_KEY) ?? 'null') as Partial<CivitaiQuery> | null
-    return { ...DEFAULT_QUERY, ...saved }
+    const query = { ...DEFAULT_QUERY, ...saved }
+    // Saved before multi-select, as a single string ('' = all).
+    const raw: unknown = query.baseModels
+    query.baseModels = Array.isArray(raw) ? raw.filter((v) => typeof v === 'string') : typeof raw === 'string' && raw ? [raw] : []
+    return query
   } catch {
     return DEFAULT_QUERY
   }
@@ -125,7 +135,7 @@ export function CivitaiBrowser({ onSendToCreate }: Props) {
     setQuery((q) => {
       const next = { ...q, ...patch }
       // Each media type has its own base-model list.
-      if (patch.type && patch.type !== q.type) next.baseModels = ''
+      if (patch.type && patch.type !== q.type) next.baseModels = []
       return next
     })
   }
@@ -178,8 +188,22 @@ export function CivitaiBrowser({ onSendToCreate }: Props) {
         </div>
       )}
       <div className="chip-row">
+        <button type="button" className={chip(query.baseModels.length === 0)} onClick={() => update({ baseModels: [] })}>
+          Tümü
+        </button>
         {BASE_MODELS[query.type].map((b) => (
-          <button key={b.label} type="button" className={chip(query.baseModels === b.value)} onClick={() => update({ baseModels: b.value })}>
+          <button
+            key={b.label}
+            type="button"
+            className={chip(query.baseModels.includes(b.value))}
+            onClick={() =>
+              update({
+                baseModels: query.baseModels.includes(b.value)
+                  ? query.baseModels.filter((v) => v !== b.value)
+                  : [...query.baseModels, b.value],
+              })
+            }
+          >
             {b.label}
           </button>
         ))}

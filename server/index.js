@@ -374,21 +374,48 @@ async function ensurePlayablePath(filePath, mtimeMs) {
   }
 }
 
-// In-memory only ("the PC's RAM", as opposed to the phone's own
-// localStorage) — a batch queued overnight, or a generation mid-flight, used
-// to live only in the *phone's* browser storage, so closing the phone,
-// clearing site data, or just switching to a different device lost track of
-// it completely even though ComfyUI itself (running on this same PC) was
-// still working through it just fine. Kept here — one always-on process on
-// the same machine as ComfyUI — instead of the phone: whatever's queued or
-// active survives a phone reboot, a different browser, a different device
-// entirely, right up until this server process itself restarts (deliberately
-// not persisted to disk — that's an explicit choice, not a limitation: this
-// is a live work queue, not a record worth keeping across a restart of the
-// thing tracking it).
+// Generation state lives on the PC, not the phone: the queue of jobs
+// waiting to run, and which ComfyUI prompt each kind ('video' | 'sdxl' |
+// 'krea2') is currently on. This server also *runs* the queue (see the
+// dispatcher below) — it used to be the phone's job, so a locked phone or a
+// backgrounded app (Android freezes its JS) left the queue stalled until the
+// app was opened again. The phone now only adds/removes items and follows
+// along. Saved to disk on every change so a panel restart doesn't drop
+// what's waiting.
 const GENERATION_KINDS = ['video', 'sdxl', 'krea2']
+const GEN_STATE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cache', 'generation-state.json')
+// Per kind: { promptId, startedAt, titles, nodeCount, done, finishedAt? } | null
 const remoteJobs = Object.fromEntries(GENERATION_KINDS.map((k) => [k, null]))
+// Per kind: [{ id, settings, workflow, addedAt }] — `settings` is opaque to
+// this server (the app's own form values, handed back for display); the
+// app also sends the ready-built ComfyUI `workflow`, which is what gets run.
 const remoteQueues = Object.fromEntries(GENERATION_KINDS.map((k) => [k, []]))
+// Per kind: { message, at } — a queued item ComfyUI refused (validation
+// error); it's dropped and this tells the app why.
+const lastQueueErrors = Object.fromEntries(GENERATION_KINDS.map((k) => [k, null]))
+let comfyReachable = true
+
+try {
+  const saved = JSON.parse(await fs.readFile(GEN_STATE_PATH, 'utf8'))
+  for (const k of GENERATION_KINDS) {
+    if (Array.isArray(saved.queues?.[k])) remoteQueues[k] = saved.queues[k]
+    if (saved.jobs?.[k]?.promptId) remoteJobs[k] = saved.jobs[k]
+  }
+} catch {
+  // first run / unreadable — start empty
+}
+
+let genStateSaveQueued = false
+function saveGenState() {
+  if (genStateSaveQueued) return
+  genStateSaveQueued = true
+  setTimeout(() => {
+    genStateSaveQueued = false
+    fs.mkdir(path.dirname(GEN_STATE_PATH), { recursive: true })
+      .then(() => fs.writeFile(GEN_STATE_PATH, JSON.stringify({ queues: remoteQueues, jobs: remoteJobs })))
+      .catch((err) => console.warn('[output-server] generation state write failed:', err.message))
+  }, 300)
+}
 
 function requireGenerationKind(kind, res) {
   if (!GENERATION_KINDS.includes(kind)) {
@@ -399,7 +426,7 @@ function requireGenerationKind(kind, res) {
 }
 
 const app = express()
-app.use(express.json({ limit: '2mb' })) // only the /api/state/* PUT routes below actually read a body
+app.use(express.json({ limit: '50mb' })) // queued items carry their full ComfyUI workflow
 
 app.get('/api/outputs/sources', (_req, res) => {
   res.json(SOURCES.map(({ id, label, root }) => ({ id, label, configured: !!root })))
@@ -556,7 +583,7 @@ const CIVITAI_LEVEL_NSFW = 4 + 8 + 16
 async function civitaiFeed({ sort, period, type, baseModels, withMeta, nsfwOnly, cursor }) {
   const browsingLevel = nsfwOnly ? CIVITAI_LEVEL_NSFW : CIVITAI_LEVEL_ALL
   const input = { period, sort, browsingLevel, types: [type], withMeta, limit: 40 }
-  if (baseModels) input.baseModels = [baseModels]
+  if (baseModels.length > 0) input.baseModels = baseModels
   if (cursor) input.cursor = cursor
   const body = await fetchCivitaiJson(`https://civitai.red/api/trpc/image.getInfinite?input=${encodeURIComponent(JSON.stringify({ json: input }))}`)
   let data = body?.result?.data
@@ -572,8 +599,8 @@ async function civitaiFeed({ sort, period, type, baseModels, withMeta, nsfwOnly,
         width: it.width,
         height: it.height,
         createdAt: it.publishedAt || it.createdAt,
-        // The feed leaves baseModel empty — the filter, when set, is the answer.
-        baseModel: it.baseModel || baseModels || null,
+        // The feed leaves baseModel empty — a single-model filter is the answer.
+        baseModel: it.baseModel || (baseModels.length === 1 ? baseModels[0] : null),
         username: it.user?.username || null,
         reactions: (s.likeCountAllTime ?? 0) + (s.heartCountAllTime ?? 0) + (s.laughCountAllTime ?? 0) + (s.cryCountAllTime ?? 0),
         comments: s.commentCountAllTime ?? 0,
@@ -594,7 +621,8 @@ app.get('/api/civitai/images', async (req, res) => {
         sort,
         period: sort === 'Newest' ? 'AllTime' : CIVITAI_PERIODS.has(req.query.period) ? req.query.period : 'Week',
         type: req.query.type === 'video' ? 'video' : 'image',
-        baseModels: typeof req.query.baseModels === 'string' ? req.query.baseModels : '',
+        // Comma-separated; Civitai's base model names never contain commas.
+        baseModels: typeof req.query.baseModels === 'string' ? req.query.baseModels.split(',').filter(Boolean) : [],
         withMeta: req.query.withMeta === 'true',
         nsfwOnly: req.query.nsfwOnly === 'true',
         cursor: typeof req.query.cursor === 'string' ? req.query.cursor : '',
@@ -711,38 +739,154 @@ app.get('/api/loras/meta', async (_req, res) => {
   }
 })
 
-// The one job currently submitted-to-or-tracked-against ComfyUI for this
-// generation kind, if any — `null` clears it. Body shape: `{ promptId,
-// startedAt } | null`, opaque to this server beyond that minimal check; the
-// client is the one that actually knows how to recover a job's progress from
-// ComfyUI's own /history using this.
+// --- Generation queue + dispatcher ------------------------------------------
+
+const COMFY_LOCAL_URL = `http://127.0.0.1:${COMFYUI_PROBE_PORT}`
+const DISPATCH_MS = 2000
+
+function queueSnapshot(kind) {
+  return {
+    items: remoteQueues[kind].map(({ id, settings }) => ({ id, settings })),
+    comfyUp: comfyReachable,
+    error: lastQueueErrors[kind],
+  }
+}
+
+function nodeTitles(workflow) {
+  return Object.fromEntries(Object.entries(workflow).map(([id, node]) => [id, node?._meta?.title || node?.class_type || id]))
+}
+
+// One pass: mark tracked jobs that left ComfyUI's queue as done, then — only
+// if ComfyUI is completely idle — submit the oldest waiting item across all
+// kinds. Waiting for idle (rather than piling everything onto ComfyUI's own
+// queue) keeps removing a waiting item from the app meaningful, and means a
+// job started any other way (ComfyUI's own UI) is never jumped.
+let dispatching = false
+async function dispatchTick() {
+  if (dispatching) return
+  dispatching = true
+  try {
+    let comfyQueue
+    try {
+      const res = await fetch(`${COMFY_LOCAL_URL}/queue`, { signal: AbortSignal.timeout(3000) })
+      comfyQueue = await res.json()
+      comfyReachable = true
+    } catch {
+      comfyReachable = false
+      return
+    }
+    const active = new Set([...(comfyQueue.queue_running ?? []), ...(comfyQueue.queue_pending ?? [])].map((e) => e[1]))
+
+    let changed = false
+    for (const kind of GENERATION_KINDS) {
+      const job = remoteJobs[kind]
+      if (job && !job.done && !active.has(job.promptId)) {
+        remoteJobs[kind] = { ...job, done: true, finishedAt: Date.now() }
+        changed = true
+      }
+    }
+    if (active.size > 0) {
+      if (changed) saveGenState()
+      return
+    }
+
+    const kind = GENERATION_KINDS.filter((k) => remoteQueues[k].length > 0).sort(
+      (a, b) => remoteQueues[a][0].addedAt - remoteQueues[b][0].addedAt,
+    )[0]
+    if (!kind) {
+      if (changed) saveGenState()
+      return
+    }
+    const item = remoteQueues[kind][0]
+    let res
+    try {
+      res = await fetch(`${COMFY_LOCAL_URL}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: item.workflow }),
+        signal: AbortSignal.timeout(15000),
+      })
+    } catch {
+      // Unreachable mid-way — keep the item, try again next tick.
+      comfyReachable = false
+      if (changed) saveGenState()
+      return
+    }
+    const body = await res.json().catch(() => ({}))
+    remoteQueues[kind].shift()
+    if (res.ok && body.prompt_id && !(body.node_errors && Object.keys(body.node_errors).length > 0)) {
+      remoteJobs[kind] = {
+        promptId: body.prompt_id,
+        startedAt: Date.now(),
+        titles: nodeTitles(item.workflow),
+        nodeCount: Object.keys(item.workflow).length,
+        done: false,
+      }
+      lastQueueErrors[kind] = null
+    } else {
+      // ComfyUI refused this one (bad model name, invalid input…) — retrying
+      // would fail the same way, so drop it and tell the app.
+      const detail = body.error?.message || (body.node_errors ? JSON.stringify(body.node_errors).slice(0, 300) : `HTTP ${res.status}`)
+      lastQueueErrors[kind] = { message: `ComfyUI işi reddetti: ${detail}`, at: Date.now() }
+    }
+    saveGenState()
+  } finally {
+    dispatching = false
+  }
+}
+setInterval(dispatchTick, DISPATCH_MS)
+
 app.get('/api/state/:kind/job', (req, res) => {
   if (!requireGenerationKind(req.params.kind, res)) return
   res.json(remoteJobs[req.params.kind])
 })
 
-app.put('/api/state/:kind/job', (req, res) => {
+// The app clears a job once it has shown its result — but only that exact
+// one: by the time it gets around to it, the dispatcher may already have
+// moved this kind on to the next job.
+app.delete('/api/state/:kind/job', (req, res) => {
   if (!requireGenerationKind(req.params.kind, res)) return
-  const body = req.body
-  remoteJobs[req.params.kind] =
-    body && typeof body.promptId === 'string' && body.promptId ? { promptId: body.promptId, startedAt: Number(body.startedAt) || Date.now() } : null
+  const job = remoteJobs[req.params.kind]
+  if (job && job.promptId === req.query.promptId) {
+    remoteJobs[req.params.kind] = null
+    saveGenState()
+  }
   res.json({ ok: true })
 })
 
-// The full "still waiting to be submitted" queue for this generation kind —
-// opaque settings objects this server never reads into, just holds and hands
-// back verbatim (the client re-validates each item through its own
-// normalizer on the way back in, the same way it already did coming out of
-// localStorage, in case of a stale/incompatible shape from an older session).
 app.get('/api/state/:kind/queue', (req, res) => {
   if (!requireGenerationKind(req.params.kind, res)) return
-  res.json(remoteQueues[req.params.kind])
+  res.json(queueSnapshot(req.params.kind))
 })
 
-app.put('/api/state/:kind/queue', (req, res) => {
+// Body: { items: [{ settings, workflow }] }. Dispatches right away when
+// ComfyUI is idle, so by the time this answers the job is usually running.
+app.post('/api/state/:kind/queue', async (req, res) => {
   if (!requireGenerationKind(req.params.kind, res)) return
-  remoteQueues[req.params.kind] = Array.isArray(req.body) ? req.body : []
-  res.json({ ok: true })
+  const items = Array.isArray(req.body?.items) ? req.body.items : []
+  const valid = items.filter((it) => it && typeof it.workflow === 'object' && it.workflow && Object.keys(it.workflow).length > 0)
+  if (valid.length === 0) return res.status(400).json({ error: 'Kuyruğa eklenecek geçerli iş yok.' })
+  const now = Date.now()
+  for (const [i, it] of valid.entries()) {
+    remoteQueues[req.params.kind].push({ id: crypto.randomUUID(), settings: it.settings ?? null, workflow: it.workflow, addedAt: now + i })
+  }
+  lastQueueErrors[req.params.kind] = null
+  saveGenState()
+  await dispatchTick()
+  res.json(queueSnapshot(req.params.kind))
+})
+
+app.delete('/api/state/:kind/queue/:id', (req, res) => {
+  if (!requireGenerationKind(req.params.kind, res)) return
+  remoteQueues[req.params.kind] = remoteQueues[req.params.kind].filter((it) => it.id !== req.params.id)
+  saveGenState()
+  res.json(queueSnapshot(req.params.kind))
+})
+
+app.delete('/api/state/:kind/queue-error', (req, res) => {
+  if (!requireGenerationKind(req.params.kind, res)) return
+  lastQueueErrors[req.params.kind] = null
+  res.json(queueSnapshot(req.params.kind))
 })
 
 // --- "Ayarlar" tab: llama-swap models / start-all.sh / machine power -------
@@ -899,15 +1043,37 @@ app.post('/api/system/start-all/stop', async (_req, res) => {
   }
 })
 
-app.post('/api/system/shutdown', (_req, res) => {
-  res.json({ ok: true })
-  // A beat so the response reaches the phone before logind tears the session
-  // down. `systemctl poweroff` needs no sudo here: the desktop session is
-  // "active" on seat0 and polkit lets an active local session power off on
-  // its own (verified: CanPowerOff → "yes").
-  setTimeout(() => {
-    spawn('systemctl', ['poweroff'], { detached: true, stdio: 'ignore' }).unref()
-  }, 800)
+// GRUB's default is Windows (for the power button), but a PC powered off
+// from here gets switched back on by Wake-on-LAN from away — and must come
+// back up in Linux, or the panel is gone. So a one-time `grub-reboot` to the
+// Linux entry is set first (the next boot only; Windows stays the default).
+// GRUB itself can't tell a WoL power-on from the power button — tying it to
+// "powered off from the app" is the closest proxy. Needs a sudoers rule for
+// exactly this command (/etc/sudoers.d/minimax-grub-reboot); if it isn't
+// there, refuse rather than shut down into a Windows boot nobody can reach.
+// Empty GRUB_LINUX_ENTRY skips all this.
+const GRUB_LINUX_ENTRY = process.env.GRUB_LINUX_ENTRY ?? 'gnulinux-simple-ba052429-c07c-4517-aa61-463c74260f53'
+
+app.post('/api/system/shutdown', async (_req, res) => {
+  try {
+    if (GRUB_LINUX_ENTRY) {
+      await new Promise((resolve, reject) => {
+        execFile('sudo', ['-n', '/usr/sbin/grub-reboot', GRUB_LINUX_ENTRY], { timeout: 15000 }, (err, _stdout, stderr) =>
+          err ? reject(new HttpError(500, `Sonraki açılış Linux'a ayarlanamadı, kapatılmadı: ${(stderr || err.message).trim()}`)) : resolve(),
+        )
+      })
+    }
+    res.json({ ok: true })
+    // A beat so the response reaches the phone before logind tears the
+    // session down. `systemctl poweroff` needs no sudo here: the desktop
+    // session is "active" on seat0 and polkit lets an active local session
+    // power off on its own (verified: CanPowerOff → "yes").
+    setTimeout(() => {
+      spawn('systemctl', ['poweroff'], { detached: true, stdio: 'ignore' }).unref()
+    }, 800)
+  } catch (err) {
+    sendError(res, err, 'Bilgisayar kapatılamadı.')
+  }
 })
 
 // Sleep instead of power-off: resume takes seconds and ComfyUI (with its

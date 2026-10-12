@@ -42,7 +42,7 @@ export interface CivitaiQuery {
   type: 'image' | 'video'
   sort: CivitaiSort
   period: CivitaiPeriod
-  baseModels: string // '' = all
+  baseModels: string[] // [] = all
   withMeta: boolean
   nsfwOnly: boolean // only R / X / XXX
 }
@@ -57,7 +57,8 @@ async function asJson<T>(res: Response): Promise<T> {
 
 export function fetchCivitaiPage(q: CivitaiQuery, cursor: string | null): Promise<CivitaiPage> {
   const params = new URLSearchParams({ sort: q.sort, period: q.period, type: q.type, withMeta: String(q.withMeta), nsfwOnly: String(q.nsfwOnly) })
-  if (q.baseModels) params.set('baseModels', q.baseModels)
+  // Civitai's base model names never contain commas.
+  if (q.baseModels.length > 0) params.set('baseModels', q.baseModels.join(','))
   if (cursor) params.set('cursor', cursor)
   return fetch(`/api/civitai/images?${params}`).then((r) => asJson<CivitaiPage>(r))
 }

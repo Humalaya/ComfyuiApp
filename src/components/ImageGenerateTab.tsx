@@ -15,7 +15,7 @@ import { buildImageWorkflow, getDefaultImageSettings, IMAGE_OUTPUT_NODE_ID, QUAL
 import { appendTriggerWords } from '../utils/promptText'
 import type { LoraSlot } from '../workflow/fieldMap'
 import { loadImageSettings, normalizeImageSettings, saveImageSettings } from '../storage/imageSettingsStorage'
-import { loadRemoteQueue, saveRemoteQueue } from '../storage/remoteQueueStorage'
+import { useRemoteQueue } from '../storage/remoteQueueStorage'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -55,15 +55,11 @@ export function ImageGenerateTab({ importRequest }: Props) {
   const [settings, setSettings] = useState<ImageGenerationSettings>(
     () => loadImageSettings() ?? { ...getDefaultImageSettings(), seed: randomSeed() },
   )
-  // Same queueing pattern as the video tab (App.tsx), now backed by the
-  // output-server's PC-RAM store (see remoteQueueStorage.ts) instead of the
-  // phone's own storage — persisted so closing the phone (not just reloading
-  // it) doesn't drop everything still waiting in line, plus a small
-  // "recently finished" log so draining the queue doesn't make the previous
-  // result disappear the instant the next one starts. Starts empty and is
-  // populated by the mount effect below (loading it is now an async fetch).
-  const [queue, setQueue] = useState<ImageGenerationSettings[]>([])
-  const [queueLoaded, setQueueLoaded] = useState(false)
+  // Jobs waiting to run — held *and run* by the PC's output-server (see
+  // remoteQueueStorage.ts), so the queue keeps going while the phone is
+  // locked or the app is closed. Plus a small "recently finished" log so the
+  // next job starting doesn't make the previous result disappear.
+  const { queue, comfyUp, queueError, append, remove, dismissError } = useRemoteQueue(KIND, normalizeImageSettings)
   const [completedResults, setCompletedResults] = useState<CompletedItem[]>([])
   // The url of the item GenerationFullscreenViewer has open — null means
   // closed. Tracked by url, not a plain index into completedResults: a new
@@ -73,75 +69,25 @@ export function ImageGenerateTab({ importRequest }: Props) {
   // newer item the moment that happened.
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const objectInfo = useObjectInfo()
-  const gen = useImageGeneration(buildImageWorkflow, IMAGE_OUTPUT_NODE_ID, KIND)
+  const gen = useImageGeneration(IMAGE_OUTPUT_NODE_ID, KIND)
 
   useEffect(() => {
     const timer = setTimeout(() => saveImageSettings(settings), 400)
     return () => clearTimeout(timer)
   }, [settings])
 
+  // Collects each finished result into the "recently finished" strip. The
+  // queue itself advances on the server (see remoteQueueStorage.ts).
+  const lastCollected = useRef(0)
   useEffect(() => {
-    let cancelled = false
-    loadRemoteQueue(KIND, normalizeImageSettings, () => cancelled).then((loaded) => {
-      if (cancelled || loaded === null) return
-      setQueue(loaded)
-      setQueueLoaded(true)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!queueLoaded) return
-    saveRemoteQueue(KIND, queue)
-  }, [queue, queueLoaded])
-
-  // Drains one queued job at a time, same design as App.tsx's video queue
-  // (see the long comment there for the full rationale) — including the
-  // lastDrainedKey guard against React StrictMode's mount-time double-invoke
-  // (this app runs under StrictMode in production too, see main.tsx), which
-  // would otherwise start two queued jobs at once right after a reload with
-  // a persisted queue and no active job.
-  const lastDrainedKey = useRef<string | null>(null)
-  useEffect(() => {
-    if (!(gen.status === 'done' || gen.status === 'error' || gen.status === 'idle')) return
-    // Wait for the queue's own PC-RAM load to finish before deciding it's
-    // empty — this races gen's own mount-time job recovery (see
-    // useImageGeneration.ts). If that settles first and finds the job
-    // already done, `queue` can still be its initial `[]` at that exact
-    // moment — reading queue.length as "0, nothing to drain" then would
-    // strand every real pending item forever, since queueLoaded flipping
-    // true afterwards was never a dependency this effect re-ran for.
-    // Including it as one now (see the array below) is what makes that late
-    // queue load retry this check.
-    if (!queueLoaded) return
-    // Also wait for gen's OWN mount-time job-recovery check to have actually
-    // run — see App.tsx's identical guard for the full rationale. Without
-    // this, 'idle' (which means EITHER "genuinely nothing running" OR
-    // "recovery hasn't reported back yet") could get read as the former
-    // right before recovery settles a leftover job to 'done' a moment later,
-    // firing this effect twice and starting two queued items whose
-    // generate() calls step on the same shared refs — this is what let
-    // queued Krea2/SDXL jobs vanish without ever reaching ComfyUI after a
-    // background process kill.
-    if (!gen.recoveryChecked) return
-    const key = `${gen.status}:${gen.settledCount}:${queueLoaded}`
-    if (lastDrainedKey.current === key) return
-    lastDrainedKey.current = key
-
+    if (gen.settledCount === lastCollected.current) return
+    lastCollected.current = gen.settledCount
     if (gen.status === 'done' && gen.result) {
       const { promptId, urls, createdAt } = gen.result
       const items: CompletedItem[] = urls.map((url) => ({ promptId, url, createdAt }))
       setCompletedResults((list) => [...items, ...list].slice(0, MAX_COMPLETED_RESULTS))
     }
-
-    if (queue.length === 0) return
-    const [next, ...rest] = queue
-    setQueue(rest)
-    gen.generate(next)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen.status, gen.settledCount, queueLoaded, gen.recoveryChecked])
+  }, [gen.settledCount, gen.status, gen.result])
 
   // The template's baked-in default checkpoint file can stop existing (get
   // renamed/removed on disk) without any code change here — this snaps back
@@ -177,10 +123,12 @@ export function ImageGenerateTab({ importRequest }: Props) {
     })
   }
 
-  const isBusy = gen.status === 'running'
+  const isBusy = gen.status === 'running' || queue.length > 0
   const canGenerate = settings.prompt.trim().length > 0
 
-  function handleGenerate() {
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleGenerate() {
     // batchSize (real ComfyUI batch_size, sent as-is on every item below) and
     // batchCount (queues this many separate jobs, each with its own
     // freshly-randomized seed when not fixed — same rationale as the video
@@ -192,17 +140,17 @@ export function ImageGenerateTab({ importRequest }: Props) {
       items.push(settings.fixedSeed ? settings : { ...settings, seed: randomSeed() })
     }
     if (!settings.fixedSeed) setSettings((s) => ({ ...s, seed: items[items.length - 1].seed }))
-    if (isBusy) {
-      setQueue((q) => [...q, ...items])
-    } else {
-      const [first, ...rest] = items
-      gen.generate(first)
-      if (rest.length > 0) setQueue((q) => [...q, ...rest])
+    setSubmitting(true)
+    try {
+      // Built here (the app owns the workflow templates); the server only
+      // runs them, one at a time, starting right away if ComfyUI is idle.
+      await append(items.map((s) => ({ settings: s, workflow: buildImageWorkflow(s) })))
+      gen.checkRemoteJob()
+    } catch (err) {
+      alert(`Kuyruğa eklenemedi: ${(err as Error).message}`)
+    } finally {
+      setSubmitting(false)
     }
-  }
-
-  function removeFromQueue(index: number) {
-    setQueue((q) => q.filter((_, i) => i !== index))
   }
 
   // Shared by the compact strip (running), the full strip (done), and
@@ -214,15 +162,25 @@ export function ImageGenerateTab({ importRequest }: Props) {
       {/* Output first, form fields below — so the current job's progress or
           result is visible the moment this tab opens, without scrolling past
           the whole form to find out whether anything even finished. */}
+      {queueError && (
+        <div className="status-warning">
+          {queueError.message}
+          <button type="button" className="secondary-button" onClick={dismissError}>
+            Tamam
+          </button>
+        </div>
+      )}
+
       {queue.length > 0 && (
         <div className="queue-panel">
           <div className="queue-title">Kuyrukta {queue.length} iş bekliyor</div>
-          {queue.map((item, i) => (
-            <div className="queue-item" key={i}>
+          {!comfyUp && <div className="status-warning">⚠ ComfyUI'ye ulaşılamıyor — ulaşılınca kuyruk kendiliğinden devam edecek.</div>}
+          {queue.map((entry, i) => (
+            <div className="queue-item" key={entry.id}>
               <span className="queue-item-label">
-                {i + 1}. {item.prompt.trim() || '(prompt yok)'}
+                {i + 1}. {entry.settings.prompt.trim() || '(prompt yok)'}
               </span>
-              <button type="button" className="queue-item-remove" onClick={() => removeFromQueue(i)} aria-label="Kuyruktan çıkar">
+              <button type="button" className="queue-item-remove" onClick={() => remove(entry.id)} aria-label="Kuyruktan çıkar">
                 ✕
               </button>
             </div>
@@ -423,7 +381,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
 
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
-      <button type="button" className="generate-button" disabled={!canGenerate} onClick={handleGenerate}>
+      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
         {isBusy ? '+ Kuyruğa Ekle' : settings.batchSize * settings.batchCount > 1 ? `Oluştur · ${settings.batchSize * settings.batchCount}` : 'Oluştur'}
       </button>
 
