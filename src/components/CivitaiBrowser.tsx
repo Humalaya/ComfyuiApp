@@ -5,6 +5,7 @@ import {
   civitaiThumbUrl,
   fetchCivitaiGeneration,
   fetchCivitaiPage,
+  sendCivitaiImageToInput,
   type CivitaiGeneration,
   type CivitaiItem,
   type CivitaiPeriod,
@@ -274,13 +275,18 @@ function CivitaiViewer({ items, index, onIndexChange, onClose, onSend }: ViewerP
   // metadata, so this is the prompt, settings and checkpoint/LoRAs shown.
   const [generation, setGeneration] = useState<Record<number, CivitaiGeneration | 'loading' | 'error'>>({})
   const [sendOpen, setSendOpen] = useState(false)
+  // "Resmi gönder": the picture itself as an input image, not its settings.
+  const [imageSendOpen, setImageSendOpen] = useState(false)
+  const [imageSending, setImageSending] = useState<'video' | 'anime2real' | null>(null)
   const [promptExpanded, setPromptExpanded] = useState(false)
   useBackHandler(true, onClose)
   // After the viewer's own handler — back closes the send sheet first.
   useBackHandler(sendOpen, () => setSendOpen(false))
+  useBackHandler(imageSendOpen, () => setImageSendOpen(false))
 
   useEffect(() => {
     setSendOpen(false)
+    setImageSendOpen(false)
     setPromptExpanded(false)
     if (generation[item.id]) return
     setGeneration((g) => ({ ...g, [item.id]: 'loading' }))
@@ -394,11 +400,53 @@ function CivitaiViewer({ items, index, onIndexChange, onClose, onSend }: ViewerP
             <button type="button" className="generate-button" disabled={!prompt} onClick={() => setSendOpen(true)}>
               Metadata gönder
             </button>
+            {item.type === 'image' && (
+              <button type="button" className="secondary-button civitai-image-send" onClick={() => setImageSendOpen(true)}>
+                Resmi gönder
+              </button>
+            )}
             <a className="secondary-button civitai-open-link" href={civitaiPageUrl(item)} target="_blank" rel="noreferrer" aria-label="Civitai'de aç">
               ↗
             </a>
           </div>
         </div>
+
+        {imageSendOpen && (
+          <div className="popup-overlay media-action-overlay" onClick={() => !imageSending && setImageSendOpen(false)}>
+            <div className="media-action-menu civitai-send-menu" onClick={(e) => e.stopPropagation()}>
+              {(
+                [
+                  { target: 'video', label: 'MiniMax (ilk kare)' },
+                  { target: 'anime2real', label: 'Anime2Real' },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.target}
+                  type="button"
+                  className="secondary-button"
+                  disabled={imageSending !== null}
+                  onClick={async () => {
+                    setImageSending(t.target)
+                    try {
+                      const inputImage = await sendCivitaiImageToInput(item)
+                      onSend(
+                        t.target === 'video'
+                          ? { kind: 'video', settings: { inputImage, inputImageEnabled: true } }
+                          : { kind: 'anime2real', settings: { inputImage } },
+                      )
+                    } catch (err) {
+                      alert(`Gönderilemedi: ${(err as Error).message}`)
+                    } finally {
+                      setImageSending(null)
+                    }
+                  }}
+                >
+                  {imageSending === t.target ? 'Gönderiliyor…' : t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {sendOpen && (
           <div className="popup-overlay media-action-overlay" onClick={() => setSendOpen(false)}>

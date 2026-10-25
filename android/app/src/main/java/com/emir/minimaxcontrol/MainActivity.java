@@ -24,6 +24,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(KeepAlivePlugin.class);
         registerPlugin(SaveMediaPlugin.class);
+        registerPlugin(ClipboardImagePlugin.class);
         super.onCreate(savedInstanceState);
         // For offline.html — see WakeOnLan.java for why this isn't a plugin.
         // Takes effect from the next page load, which is exactly when the

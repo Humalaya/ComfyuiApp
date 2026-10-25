@@ -82,3 +82,22 @@ export function civitaiFullUrl(item: CivitaiItem): string {
 export function civitaiPageUrl(item: CivitaiItem): string {
   return `https://civitai.com/images/${item.id}`
 }
+
+export interface InputImageRef {
+  filename: string
+  subfolder: string
+  type: string
+}
+
+// Has the PC download this image from Civitai and put it into ComfyUI's
+// input folder (server/index.js /api/civitai/to-input) — the result is
+// usable as the video tab's first frame or Anime2Real's input. Images only:
+// Civitai's CDN won't hand out a still of a video, only the whole file.
+export async function sendCivitaiImageToInput(item: CivitaiItem): Promise<InputImageRef> {
+  const res = await fetch('/api/civitai/to-input', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: item.id, url: item.url }),
+  })
+  return asJson<InputImageRef>(res)
+}

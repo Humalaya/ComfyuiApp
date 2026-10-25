@@ -257,6 +257,17 @@ input[type='range'] {
   font-size: 1rem;
 }
 
+.image-uploader-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.image-uploader-actions .secondary-button {
+  flex: 1;
+  padding: 10px 8px;
+  font-size: 0.85rem;
+}
+
 .image-uploader-wide {
   aspect-ratio: auto;
   height: 240px;
@@ -1795,6 +1806,11 @@ input[type='range'] {
   display: flex;
   gap: 8px;
   margin-top: 4px;
+}
+
+.civitai-image-send {
+  flex-shrink: 0;
+  padding: 12px 14px;
 }
 
 .civitai-actions .generate-button {

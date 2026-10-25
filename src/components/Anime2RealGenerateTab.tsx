@@ -77,6 +77,20 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 
+  // A short-lived version briefly switched non-turbo models to CFG 3 + 20
+  // steps automatically (and rewrote saved settings to that); the defaults
+  // are back to CFG 1 + 8 — undo that rewrite once.
+  useEffect(() => {
+    const FLAG = 'mobile-control:anime2real-cfg-reset'
+    try {
+      if (localStorage.getItem(FLAG)) return
+      localStorage.setItem(FLAG, '1')
+    } catch {
+      return
+    }
+    setSettings((s) => (s.cfg === 3 && s.steps === 20 ? { ...s, cfg: 1, steps: 8 } : s))
+  }, [])
+
   // A saved model name can go stale — snap to what ComfyUI actually has.
   useEffect(() => {
     if (objectInfo.krea2UnetNames.length === 0) return
@@ -231,7 +245,13 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       </div>
 
       <div className="field">
-        <label className="field-label">Model</label>
+        <label className="field-label">
+          Model
+          <HelpTip>
+            Varsayılan CFG 1 + 8 adım turbo modeller için hızlı ayar. Turbo olmayan bir modelde (ör. krea2_v25) sonuç soluk
+            çıkarsa Gelişmiş Ayarlar'dan CFG 3 + 20 adım dene — renkler girdiye yakın çıkar ama süre ~5 katı olur.
+          </HelpTip>
+        </label>
         <select value={settings.unetName} onChange={(e) => update('unetName', e.target.value)} disabled={objectInfo.loading}>
           {!objectInfo.krea2UnetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
           {objectInfo.krea2UnetNames.map((name) => (

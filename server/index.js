@@ -637,6 +637,41 @@ app.get('/api/civitai/images', async (req, res) => {
 // feed carries no generation metadata, so this is where the viewer gets the
 // prompt, settings, size and checkpoint/LoRAs of an opened post. Best-effort:
 // any failure just means "no info".
+// Puts a Civitai image into ComfyUI's input folder, so it can be used as an
+// input picture (the video tab's first frame, Anime2Real's input). Done
+// here rather than on the phone: the PC fetches it straight from Civitai's
+// CDN — the phone would otherwise download the full-size original over
+// mobile data only to upload it right back. Only Civitai's image CDN is
+// accepted as a source.
+app.post('/api/civitai/to-input', async (req, res) => {
+  try {
+    const id = Number(req.body?.id)
+    let url
+    try {
+      url = new URL(String(req.body?.url ?? ''))
+    } catch {
+      throw new HttpError(400, 'Geçersiz görsel adresi.')
+    }
+    if (url.protocol !== 'https:' || url.hostname !== 'image.civitai.com') throw new HttpError(400, 'Sadece Civitai görselleri gönderilebilir.')
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(60000) })
+    if (!upstream.ok) throw new HttpError(502, `Görsel indirilemedi (Civitai ${upstream.status}).`)
+    const type = upstream.headers.get('content-type') || 'image/jpeg'
+    if (!type.startsWith('image/')) throw new HttpError(400, 'Bu bir görsel değil.')
+    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg'
+    const blob = new Blob([await upstream.arrayBuffer()], { type })
+
+    const form = new FormData()
+    form.append('image', blob, `civitai_${Number.isInteger(id) && id > 0 ? id : Date.now()}.${ext}`)
+    form.append('overwrite', 'true')
+    const up = await fetch(`${COMFY_LOCAL_URL}/upload/image`, { method: 'POST', body: form, signal: AbortSignal.timeout(30000) })
+    if (!up.ok) throw new HttpError(502, `ComfyUI'ye yüklenemedi (${up.status}).`)
+    const saved = await up.json()
+    res.json({ filename: saved.name, subfolder: saved.subfolder ?? '', type: saved.type ?? 'input' })
+  } catch (err) {
+    sendError(res, err, 'Görsel gönderilemedi.')
+  }
+})
+
 app.get('/api/civitai/generation', async (req, res) => {
   try {
     const id = Number(req.query.id)

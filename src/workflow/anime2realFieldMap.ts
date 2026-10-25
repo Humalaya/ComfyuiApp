@@ -31,6 +31,12 @@ export const ANIME2REAL_NODE_IDS = {
 
 export const ANIME2REAL_LORA_SLOT_COUNT = 10
 
+// Defaults are the original workflow's CFG 1 + 8 steps (a turbo setting).
+// On a regular (non-turbo) Krea2 model that comes out paler and flatter —
+// measured 2026-10 on krea2_v25, same input and seed: CFG 1/8 steps gave
+// saturation 66 / contrast 50 vs the input's 81 / 63, CFG 3/20 steps kept
+// them (84 / 64) at ~5× the time. Left to the user (Gelişmiş Ayarlar).
+
 export const ANIME2REAL_OUTPUT_NODE_ID = '228'
 
 export interface ImageRef {

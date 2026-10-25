@@ -1,7 +1,7 @@
 {
   "215": {
     "inputs": {
-      "unet_name": "Image/finepornV5INT8_v5INT8.safetensors",
+      "unet_name": "Image/krea2_v25Fp8.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
