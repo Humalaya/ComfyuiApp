@@ -7,15 +7,24 @@ import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
 import { CollapsibleSection } from './CollapsibleSection'
 import { TagCheatSheet } from './TagCheatSheet'
 import { HelpTip } from './HelpTip'
+import { Img2ImgSection } from './Img2ImgSection'
+import { IMG2IMG_DEFAULT_DENOISE } from '../workflow/img2img'
 import { randomSeed, SeedField } from './SeedField'
 import { modelLabel } from '../utils/modelLabel'
 import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useImageGeneration } from '../hooks/useImageGeneration'
-import { buildImageWorkflow, getDefaultImageSettings, IMAGE_OUTPUT_NODE_ID, QUALITY_PRESETS, type ImageGenerationSettings } from '../workflow/imageFieldMap'
+import {
+  buildImageWorkflow,
+  getDefaultImageSettings,
+  IMAGE_OUTPUT_NODE_ID,
+  QUALITY_PRESETS,
+  type ImageGenerationSettings,
+} from '../workflow/imageFieldMap'
 import { appendTriggerWords } from '../utils/promptText'
 import type { LoraSlot } from '../workflow/fieldMap'
 import { loadImageSettings, normalizeImageSettings, saveImageSettings } from '../storage/imageSettingsStorage'
 import { useRemoteQueue } from '../storage/remoteQueueStorage'
+import { PromptGenerator } from './PromptGenerator'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -42,7 +51,10 @@ interface Props {
   // in the form. `id` is a nonce: the effect below only reacts when it
   // actually changes, so sending the exact same PNG's settings twice in a
   // row still registers as a fresh request instead of silently no-op'ing.
-  importRequest?: { settings: Partial<ImageGenerationSettings>; id: number } | null
+  importRequest?: {
+    settings: Partial<ImageGenerationSettings>
+    id: number
+  } | null
 }
 
 // Text2Img — see imageFieldMap.ts for what this workflow does and doesn't
@@ -53,7 +65,11 @@ interface Props {
 // and there was never a compatible standalone VAE file to switch to anyway).
 export function ImageGenerateTab({ importRequest }: Props) {
   const [settings, setSettings] = useState<ImageGenerationSettings>(
-    () => loadImageSettings() ?? { ...getDefaultImageSettings(), seed: randomSeed() },
+    () =>
+      loadImageSettings() ?? {
+        ...getDefaultImageSettings(),
+        seed: randomSeed(),
+      },
   )
   // Jobs waiting to run — held *and run* by the PC's output-server (see
   // remoteQueueStorage.ts), so the queue keeps going while the phone is
@@ -70,6 +86,9 @@ export function ImageGenerateTab({ importRequest }: Props) {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const objectInfo = useObjectInfo()
   const gen = useImageGeneration(IMAGE_OUTPUT_NODE_ID, KIND)
+  // Last cursor position in each prompt box — the tag cheat sheet inserts there.
+  const promptCursor = useRef<number | null>(null)
+  const negativeCursor = useRef<number | null>(null)
 
   useEffect(() => {
     const timer = setTimeout(() => saveImageSettings(settings), 400)
@@ -84,7 +103,11 @@ export function ImageGenerateTab({ importRequest }: Props) {
     lastCollected.current = gen.settledCount
     if (gen.status === 'done' && gen.result) {
       const { promptId, urls, createdAt } = gen.result
-      const items: CompletedItem[] = urls.map((url) => ({ promptId, url, createdAt }))
+      const items: CompletedItem[] = urls.map((url) => ({
+        promptId,
+        url,
+        createdAt,
+      }))
       setCompletedResults((list) => [...items, ...list].slice(0, MAX_COMPLETED_RESULTS))
     }
   }, [gen.settledCount, gen.status, gen.result])
@@ -107,7 +130,12 @@ export function ImageGenerateTab({ importRequest }: Props) {
   // re-fire on every unrelated re-render.
   useEffect(() => {
     if (!importRequest) return
-    setSettings((s) => ({ ...s, ...importRequest.settings }))
+    setSettings((s) => {
+      const next = { ...s, ...importRequest.settings }
+      // A picture sent here for img2img while denoise still says 1 (= ignore it).
+      if (importRequest.settings.img2img && next.denoise >= 1) next.denoise = IMG2IMG_DEFAULT_DENOISE
+      return next
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 
@@ -221,29 +249,36 @@ export function ImageGenerateTab({ importRequest }: Props) {
       )}
 
       <div className="field">
-        <label className="field-label">Prompt</label>
+        <div className="field-label" id="sdxl-prompt-label">
+          Prompt
+          <PromptGenerator target="sdxl" onUse={(text) => update('prompt', text)} />
+        </div>
         <textarea
+          aria-labelledby="sdxl-prompt-label"
           className="prompt-textarea"
           rows={6}
           value={settings.prompt}
           onChange={(e) => update('prompt', e.target.value)}
+          onSelect={(e) => (promptCursor.current = e.currentTarget.selectionStart)}
           placeholder="Görselde ne olmasını istediğini yaz…"
         />
       </div>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="sdxl-negatif-prompt">
           Negatif Prompt
           <HelpTip>
-            Görselde istemediğin şeyler. CFG 0 iken negatif prompt'un hiçbir etkisi olmadığı (classifier-free guidance devre dışı)
-            için kutu kapanır.
+            Görselde istemediğin şeyler. CFG 0 iken negatif prompt'un hiçbir etkisi olmadığı (classifier-free guidance devre dışı) için kutu
+            kapanır.
           </HelpTip>
         </label>
         <textarea
+          id="sdxl-negatif-prompt"
           className="prompt-textarea"
           rows={3}
           value={settings.negativePrompt}
           onChange={(e) => update('negativePrompt', e.target.value)}
+          onSelect={(e) => (negativeCursor.current = e.currentTarget.selectionStart)}
           placeholder={settings.cfg === 0 ? 'CFG 0 — kapalı' : 'İstemediğin şeyler…'}
           disabled={settings.cfg === 0}
         />
@@ -254,14 +289,16 @@ export function ImageGenerateTab({ importRequest }: Props) {
         negativePrompt={settings.negativePrompt}
         onPromptChange={(prompt) => update('prompt', prompt)}
         onNegativePromptChange={(negativePrompt) => update('negativePrompt', negativePrompt)}
+        promptCursor={promptCursor}
+        negativeCursor={negativeCursor}
       />
 
       <div className="field">
         <label className="field-label">
           Quality Prompt
           <HelpTip>
-            Checkpoint ailesine uygun sabit kalite etiketlerini ekler. Prompt kutularında görünmez, sadece üretime gönderilirken
-            eklenir. Seçiliye tekrar dokunmak kapatır.
+            Checkpoint ailesine uygun sabit kalite etiketlerini ekler. Prompt kutularında görünmez, sadece üretime gönderilirken eklenir.
+            Seçiliye tekrar dokunmak kapatır.
             {settings.qualityPreset !== 'none' && (
               <>
                 <br />
@@ -287,14 +324,28 @@ export function ImageGenerateTab({ importRequest }: Props) {
         </div>
       </div>
 
+      <Img2ImgSection
+        idPrefix="sdxl"
+        enabled={settings.img2img}
+        image={settings.inputImage}
+        denoise={settings.denoise}
+        width={settings.width}
+        height={settings.height}
+        onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+      />
+
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Genişlik</label>
-          <NumberField min={64} max={4096} step={64} value={settings.width} onChange={(v) => update('width', v)} />
+          <label className="field-label" htmlFor="sdxl-genislik">
+            Genişlik
+          </label>
+          <NumberField id="sdxl-genislik" min={64} max={4096} step={64} value={settings.width} onChange={(v) => update('width', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Yükseklik</label>
-          <NumberField min={64} max={4096} step={64} value={settings.height} onChange={(v) => update('height', v)} />
+          <label className="field-label" htmlFor="sdxl-yukseklik">
+            Yükseklik
+          </label>
+          <NumberField id="sdxl-yukseklik" min={64} max={4096} step={64} value={settings.height} onChange={(v) => update('height', v)} />
         </div>
       </div>
 
@@ -306,8 +357,15 @@ export function ImageGenerateTab({ importRequest }: Props) {
       />
 
       <div className="field">
-        <label className="field-label">Checkpoint</label>
-        <select value={settings.checkpoint} onChange={(e) => update('checkpoint', e.target.value)} disabled={objectInfo.loading}>
+        <label className="field-label" htmlFor="sdxl-checkpoint">
+          Checkpoint
+        </label>
+        <select
+          id="sdxl-checkpoint"
+          value={settings.checkpoint}
+          onChange={(e) => update('checkpoint', e.target.value)}
+          disabled={objectInfo.loading}
+        >
           {!objectInfo.checkpointNames.includes(settings.checkpoint) && <option value={settings.checkpoint}>{settings.checkpoint}</option>}
           {objectInfo.checkpointNames.map((name) => (
             <option key={name} value={name}>
@@ -327,37 +385,97 @@ export function ImageGenerateTab({ importRequest }: Props) {
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Adım Sayısı</label>
-          <NumberField min={1} max={100} step={1} value={settings.steps} onChange={(v) => update('steps', v)} />
+          <label className="field-label" htmlFor="sdxl-adim-sayisi">
+            Adım Sayısı
+          </label>
+          <NumberField id="sdxl-adim-sayisi" min={1} max={100} step={1} value={settings.steps} onChange={(v) => update('steps', v)} />
         </div>
         <div className="field">
-          <label className="field-label">CFG</label>
-          <NumberField min={0} max={30} step={0.5} value={settings.cfg} onChange={(v) => update('cfg', v)} />
+          <label className="field-label" htmlFor="sdxl-cfg">
+            CFG
+          </label>
+          <NumberField id="sdxl-cfg" min={0} max={30} step={0.5} value={settings.cfg} onChange={(v) => update('cfg', v)} />
         </div>
       </div>
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">
+          <label className="field-label" htmlFor="sdxl-batch-size">
             Batch Size
             <HelpTip>
-              <b>Batch Size:</b> tek işte kaç görsel üretileceği. <b>Batch Count:</b> kaç ayrı işin art arda kuyruğa ekleneceği.
-              İkisi çarpılır — 4 × 3 = 3 iş, her birinde 4 görsel.
+              <b>Batch Size:</b> tek işte kaç görsel üretileceği. <b>Batch Count:</b> kaç ayrı işin art arda kuyruğa ekleneceği. İkisi
+              çarpılır — 4 × 3 = 3 iş, her birinde 4 görsel.
             </HelpTip>
           </label>
-          <NumberField min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
+          <NumberField id="sdxl-batch-size" min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Batch Count</label>
-          <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
+          <label className="field-label" htmlFor="sdxl-batch-count">
+            Batch Count
+          </label>
+          <NumberField
+            id="sdxl-batch-count"
+            min={1}
+            max={20}
+            step={1}
+            value={settings.batchCount}
+            onChange={(v) => update('batchCount', v)}
+          />
         </div>
       </div>
 
       <CollapsibleSection title="Gelişmiş Ayarlar">
         <div className="field">
-          <label className="field-label">Sampler</label>
-          <select value={settings.samplerName} onChange={(e) => update('samplerName', e.target.value)} disabled={objectInfo.loading}>
-            {!objectInfo.samplerNames.includes(settings.samplerName) && <option value={settings.samplerName}>{settings.samplerName}</option>}
+          <label className="field-label" htmlFor="sdxl-yuz-rotusu">
+            Yüz rötuşu
+            <HelpTip>
+              Ana görselden sonra yüzleri bulup daha yüksek çözünürlükte yeniden işler (FaceDetailer). Kapalıyken görsel rötuşsuz kaydedilir
+              ve üretim daha hızlı biter. Adım sayısı rötuşun kaç adım süreceği.
+            </HelpTip>
+          </label>
+          <div className="seed-row">
+            <NumberField
+              id="sdxl-yuz-rotusu"
+              min={1}
+              max={50}
+              step={1}
+              value={settings.faceDetailerSteps}
+              onChange={(v) => update('faceDetailerSteps', v)}
+              disabled={!settings.faceDetailer}
+            />
+            <button
+              type="button"
+              className={settings.faceDetailer ? 'toggle-pill toggle-pill-on' : 'toggle-pill'}
+              aria-pressed={settings.faceDetailer}
+              onClick={() => update('faceDetailer', !settings.faceDetailer)}
+            >
+              {settings.faceDetailer ? 'Açık' : 'Kapalı'}
+            </button>
+          </div>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="sdxl-clip-skip">
+            Clip skip
+            <HelpTip>
+              Metin kodlayıcının son kaç katmanının atlanacağı. Illustrious, NoobAI ve Pony gibi anime modelleri 2 ile eğitildi; 1 bazı
+              gerçekçi modellerde daha iyi sonuç verir.
+            </HelpTip>
+          </label>
+          <NumberField id="sdxl-clip-skip" min={1} max={12} step={1} value={settings.clipSkip} onChange={(v) => update('clipSkip', v)} />
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="sdxl-sampler">
+            Sampler
+          </label>
+          <select
+            id="sdxl-sampler"
+            value={settings.samplerName}
+            onChange={(e) => update('samplerName', e.target.value)}
+            disabled={objectInfo.loading}
+          >
+            {!objectInfo.samplerNames.includes(settings.samplerName) && (
+              <option value={settings.samplerName}>{settings.samplerName}</option>
+            )}
             {objectInfo.samplerNames.map((name) => (
               <option key={name} value={name}>
                 {name}
@@ -366,8 +484,15 @@ export function ImageGenerateTab({ importRequest }: Props) {
           </select>
         </div>
         <div className="field">
-          <label className="field-label">Scheduler</label>
-          <select value={settings.scheduler} onChange={(e) => update('scheduler', e.target.value)} disabled={objectInfo.loading}>
+          <label className="field-label" htmlFor="sdxl-scheduler">
+            Scheduler
+          </label>
+          <select
+            id="sdxl-scheduler"
+            value={settings.scheduler}
+            onChange={(e) => update('scheduler', e.target.value)}
+            disabled={objectInfo.loading}
+          >
             {!objectInfo.schedulerNames.includes(settings.scheduler) && <option value={settings.scheduler}>{settings.scheduler}</option>}
             {objectInfo.schedulerNames.map((name) => (
               <option key={name} value={name}>
@@ -377,15 +502,25 @@ export function ImageGenerateTab({ importRequest }: Props) {
           </select>
         </div>
         <div className="field">
-          <label className="field-label">Denoise</label>
-          <NumberField min={0} max={1} step={0.01} value={settings.denoise} onChange={(v) => update('denoise', v)} />
+          <label className="field-label" htmlFor="sdxl-denoise">
+            Denoise
+            <HelpTip>
+              img2img kapalıyken 1 kalmalı (1'in altı boş tuvalde gürültüyü temizlemeden bırakır, görsel bulanık çıkar). img2img açıkken
+              görselin ne kadarının yeniden çizileceği — yukarıdaki "Değişim oranı" ile aynı ayar.
+            </HelpTip>
+          </label>
+          <NumberField id="sdxl-denoise" min={0} max={1} step={0.01} value={settings.denoise} onChange={(v) => update('denoise', v)} />
         </div>
       </CollapsibleSection>
 
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
       <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
-        {isBusy ? '+ Kuyruğa Ekle' : settings.batchSize * settings.batchCount > 1 ? `Oluştur · ${settings.batchSize * settings.batchCount}` : 'Oluştur'}
+        {isBusy
+          ? '+ Kuyruğa Ekle'
+          : settings.batchSize * settings.batchCount > 1
+            ? `Oluştur · ${settings.batchSize * settings.batchCount}`
+            : 'Oluştur'}
       </button>
 
       {viewerUrl !== null && (

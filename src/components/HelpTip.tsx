@@ -30,7 +30,7 @@ export function HelpTip({ children }: Props) {
       </button>
       {open &&
         createPortal(
-          <div className="popup-overlay help-overlay" onClick={() => setOpen(false)}>
+          <div role="dialog" aria-modal="true" className="popup-overlay help-overlay" onClick={() => setOpen(false)}>
             <div className="help-card">{children}</div>
           </div>,
           document.body,

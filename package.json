@@ -9,7 +9,8 @@
     "server": "node server/index.js",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "node scripts/deploy-web.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.1",

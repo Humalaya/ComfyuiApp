@@ -33,3 +33,8 @@ android/.idea
 *.njsproj
 *.sln
 *.sw?
+
+# Danbooru tag generator downloads (scripts/danbooru)
+scripts/danbooru/cache
+dist-next
+dist-old

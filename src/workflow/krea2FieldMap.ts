@@ -1,6 +1,7 @@
 import krea2TemplateJson from './krea2Template.json'
 import type { ComfyWorkflow } from '../api/comfyClient'
 import { type LoraSlot } from './fieldMap'
+import { applyImg2Img, type InputImageRef } from './img2img'
 
 // Node ids inside the Krea2 (FLUX) Text2Img workflow — keep in sync with
 // krea2Template.json.
@@ -29,6 +30,7 @@ export const KREA2_NODE_IDS = {
   pass1: '91:108',
   pass2: '91:109',
   diffusionModel: '91:100', // UNETLoader — the actual FLUX/Krea2 checkpoint
+  vae: '91:99',
 } as const
 
 export const KREA2_LORA_SLOT_COUNT = 22
@@ -78,6 +80,10 @@ export interface Krea2GenerationSettings {
   scheduler2: string
   denoise2: number
   loras: LoraSlot[]
+  // img2img (see img2img.ts): pass 1 starts from this picture; denoise1
+  // says how much of it changes.
+  img2img: boolean
+  inputImage: InputImageRef | null
 }
 
 function readKrea2LoraSlots(): LoraSlot[] {
@@ -110,6 +116,8 @@ export function getDefaultKrea2Settings(): Krea2GenerationSettings {
     scheduler2: String(t[KREA2_NODE_IDS.pass2].inputs.scheduler ?? 'kl_optimal'),
     denoise2: Number(t[KREA2_NODE_IDS.pass2].inputs.denoise ?? 0.27),
     loras: readKrea2LoraSlots(),
+    img2img: false,
+    inputImage: null,
   }
 }
 
@@ -130,10 +138,22 @@ export function buildKrea2Workflow(settings: Krea2GenerationSettings): ComfyWork
   workflow[KREA2_NODE_IDS.pass2].inputs.steps = settings.steps2
   workflow[KREA2_NODE_IDS.pass1].inputs.sampler_name = settings.samplerName1
   workflow[KREA2_NODE_IDS.pass1].inputs.scheduler = settings.scheduler1
-  workflow[KREA2_NODE_IDS.pass1].inputs.denoise = settings.denoise1
+  // img2img on without a picture: plain generation, full denoise.
+  workflow[KREA2_NODE_IDS.pass1].inputs.denoise = settings.img2img && !settings.inputImage ? 1 : settings.denoise1
   workflow[KREA2_NODE_IDS.pass2].inputs.sampler_name = settings.samplerName2
   workflow[KREA2_NODE_IDS.pass2].inputs.scheduler = settings.scheduler2
   workflow[KREA2_NODE_IDS.pass2].inputs.denoise = settings.denoise2
+
+  if (settings.img2img && settings.inputImage) {
+    applyImg2Img(workflow, {
+      image: settings.inputImage,
+      vae: [KREA2_NODE_IDS.vae, 0],
+      width: settings.width,
+      height: settings.height,
+      batchSize: settings.batchSize,
+      target: { node: KREA2_NODE_IDS.pass1, input: 'latent_image' },
+    })
+  }
 
   const loraInputs = workflow[KREA2_NODE_IDS.loraLoader].inputs
   settings.loras.forEach((slot, i) => {

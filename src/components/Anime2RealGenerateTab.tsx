@@ -21,6 +21,7 @@ import type { LoraSlot } from '../workflow/fieldMap'
 import { loadAnime2RealSettings, normalizeAnime2RealSettings, saveAnime2RealSettings } from '../storage/anime2realSettingsStorage'
 import { appendTriggerWords } from '../utils/promptText'
 import { useRemoteQueue } from '../storage/remoteQueueStorage'
+import { PromptGenerator } from './PromptGenerator'
 
 // This kind's key in the output-server's /api/state/:kind/* store.
 const KIND = 'anime2real'
@@ -205,15 +206,17 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       />
 
       <div className="field">
-        <label className="field-label">
+        <div className="field-label" id="a2r-talimat-label">
           Talimat
           <HelpTip>
-            Varsayılan "transform the image to realistic photograph" LoRA'nın kendi tetik cümlesi. Arkasına kısa bir tarif eklemek
-            sonucu iyileştirir: ırk, yaş, saç rengi, ifade, poz, çekim açısı. Daha az gerçekçi bir sonuç için "Semi-realistic
-            photograph" yazabilirsin. Yeterince gerçekçi olmazsa sonucu tekrar dönüştürmek de işe yarar.
+            Varsayılan "transform the image to realistic photograph" LoRA'nın kendi tetik cümlesi. Arkasına kısa bir tarif eklemek sonucu
+            iyileştirir: ırk, yaş, saç rengi, ifade, poz, çekim açısı. Daha az gerçekçi bir sonuç için "Semi-realistic photograph"
+            yazabilirsin. Yeterince gerçekçi olmazsa sonucu tekrar dönüştürmek de işe yarar.
           </HelpTip>
-        </label>
+          <PromptGenerator target="anime2real" onUse={(text) => update('prompt', text)} />
+        </div>
         <textarea
+          aria-labelledby="a2r-talimat-label"
           className="prompt-textarea"
           rows={4}
           value={settings.prompt}
@@ -223,20 +226,25 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       </div>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="a2r-sistem-talimati">
           Sistem talimatı
           <HelpTip>
             Modele girdi görselini nasıl okuyacağını ve talimatı nasıl uygulayacağını anlatan sabit yönerge (system_prompt). Korunmasını
-            istediğin ayrıntıları buraya yazabilirsin, ör. "keep the exact pose, clothing and background". Varsayılana dönmek için
-            ↺'ye bas.
+            istediğin ayrıntıları buraya yazabilirsin, ör. "keep the exact pose, clothing and background". Varsayılana dönmek için ↺'ye bas.
           </HelpTip>
           {settings.systemPrompt !== DEFAULT_SYSTEM_PROMPT && (
-            <button type="button" className="help-tip" onClick={() => update('systemPrompt', DEFAULT_SYSTEM_PROMPT)} aria-label="Varsayılana dön">
+            <button
+              type="button"
+              className="help-tip"
+              onClick={() => update('systemPrompt', DEFAULT_SYSTEM_PROMPT)}
+              aria-label="Varsayılana dön"
+            >
               ↺
             </button>
           )}
         </label>
         <textarea
+          id="a2r-sistem-talimati"
           className="prompt-textarea"
           rows={5}
           value={settings.systemPrompt}
@@ -245,14 +253,14 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       </div>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="a2r-model">
           Model
           <HelpTip>
-            Varsayılan CFG 1 + 8 adım turbo modeller için hızlı ayar. Turbo olmayan bir modelde (ör. krea2_v25) sonuç soluk
-            çıkarsa Gelişmiş Ayarlar'dan CFG 3 + 20 adım dene — renkler girdiye yakın çıkar ama süre ~5 katı olur.
+            Varsayılan CFG 1 + 8 adım turbo modeller için hızlı ayar. Turbo olmayan bir modelde (ör. krea2_v25) sonuç soluk çıkarsa Gelişmiş
+            Ayarlar'dan CFG 3 + 20 adım dene — renkler girdiye yakın çıkar ama süre ~5 katı olur.
           </HelpTip>
         </label>
-        <select value={settings.unetName} onChange={(e) => update('unetName', e.target.value)} disabled={objectInfo.loading}>
+        <select id="a2r-model" value={settings.unetName} onChange={(e) => update('unetName', e.target.value)} disabled={objectInfo.loading}>
           {!objectInfo.krea2UnetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
           {objectInfo.krea2UnetNames.map((name) => (
             <option key={name} value={name}>
@@ -264,18 +272,22 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">
+          <label className="field-label" htmlFor="a2r-uzun-kenar">
             Uzun kenar
-            <HelpTip>Sonucun en uzun kenarı (piksel). Girdi görseli oranı korunarak bu boyuta getirilir. 1536 iyi bir denge; büyüdükçe süre uzar.</HelpTip>
+            <HelpTip>
+              Sonucun en uzun kenarı (piksel). Girdi görseli oranı korunarak bu boyuta getirilir. 1536 iyi bir denge; büyüdükçe süre uzar.
+            </HelpTip>
           </label>
-          <NumberField min={512} max={2560} step={64} value={settings.maxSide} onChange={(v) => update('maxSide', v)} />
+          <NumberField id="a2r-uzun-kenar" min={512} max={2560} step={64} value={settings.maxSide} onChange={(v) => update('maxSide', v)} />
         </div>
         <div className="field">
-          <label className="field-label">
+          <label className="field-label" htmlFor="a2r-adet">
             Adet
-            <HelpTip>Aynı görseli kaç kez dönüştüreceği — her biri ayrı iş olarak kuyruğa eklenir, Sabit kapalıysa her birine yeni seed seçilir.</HelpTip>
+            <HelpTip>
+              Aynı görseli kaç kez dönüştüreceği — her biri ayrı iş olarak kuyruğa eklenir, Sabit kapalıysa her birine yeni seed seçilir.
+            </HelpTip>
           </label>
-          <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
+          <NumberField id="a2r-adet" min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
         </div>
       </div>
 
@@ -297,19 +309,32 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       <CollapsibleSection title="Gelişmiş Ayarlar">
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Adım</label>
-            <NumberField min={1} max={50} step={1} value={settings.steps} onChange={(v) => update('steps', v)} />
+            <label className="field-label" htmlFor="a2r-adim">
+              Adım
+            </label>
+            <NumberField id="a2r-adim" min={1} max={50} step={1} value={settings.steps} onChange={(v) => update('steps', v)} />
           </div>
           <div className="field">
-            <label className="field-label">CFG</label>
-            <NumberField min={0} max={10} step={0.1} value={settings.cfg} onChange={(v) => update('cfg', v)} />
+            <label className="field-label" htmlFor="a2r-cfg">
+              CFG
+            </label>
+            <NumberField id="a2r-cfg" min={0} max={10} step={0.1} value={settings.cfg} onChange={(v) => update('cfg', v)} />
           </div>
         </div>
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Sampler</label>
-            <select value={settings.samplerName} onChange={(e) => update('samplerName', e.target.value)} disabled={objectInfo.loading}>
-              {!objectInfo.samplerNames.includes(settings.samplerName) && <option value={settings.samplerName}>{settings.samplerName}</option>}
+            <label className="field-label" htmlFor="a2r-sampler">
+              Sampler
+            </label>
+            <select
+              id="a2r-sampler"
+              value={settings.samplerName}
+              onChange={(e) => update('samplerName', e.target.value)}
+              disabled={objectInfo.loading}
+            >
+              {!objectInfo.samplerNames.includes(settings.samplerName) && (
+                <option value={settings.samplerName}>{settings.samplerName}</option>
+              )}
               {objectInfo.samplerNames.map((name) => (
                 <option key={name} value={name}>
                   {name}
@@ -318,8 +343,15 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">Scheduler</label>
-            <select value={settings.scheduler} onChange={(e) => update('scheduler', e.target.value)} disabled={objectInfo.loading}>
+            <label className="field-label" htmlFor="a2r-scheduler">
+              Scheduler
+            </label>
+            <select
+              id="a2r-scheduler"
+              value={settings.scheduler}
+              onChange={(e) => update('scheduler', e.target.value)}
+              disabled={objectInfo.loading}
+            >
               {!objectInfo.schedulerNames.includes(settings.scheduler) && <option value={settings.scheduler}>{settings.scheduler}</option>}
               {objectInfo.schedulerNames.map((name) => (
                 <option key={name} value={name}>

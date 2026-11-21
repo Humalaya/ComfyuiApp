@@ -79,7 +79,11 @@ export function StatusPanel({
       <div className="status-panel status-panel-done">
         <div className="status-title">✓ Üretim Tamamlandı</div>
         {totalElapsedSeconds !== null && <div className="status-row">Toplam süre: {totalElapsedSeconds} sn</div>}
-        <button type="button" className="secondary-button" onClick={() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+        >
           Sonucu Görüntüle
         </button>
         <div ref={resultRef}>
@@ -107,7 +111,9 @@ export function StatusPanel({
       </div>
 
       {connectionLost && (
-        <div className="status-warning">⚠ ComfyUI'ye ulaşılamıyor — sunucu kapalı veya çökmüş olabilir. Yeniden denenmeye devam ediliyor…</div>
+        <div className="status-warning">
+          ⚠ ComfyUI'ye ulaşılamıyor — sunucu kapalı veya çökmüş olabilir. Yeniden denenmeye devam ediliyor…
+        </div>
       )}
 
       {/* No fine-grained progress survives a page reload (screen lock, OEM

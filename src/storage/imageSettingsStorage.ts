@@ -4,6 +4,7 @@
 // overlap in prompt/seed/loras and diverge everywhere else (width/height/cfg
 // vs aspect ratio/framerate/duration).
 import { LORA_SLOT_COUNT, type LoraSlot } from '../workflow/fieldMap'
+import { normalizeInputImage } from '../workflow/img2img'
 import { getDefaultImageSettings, QUALITY_PRESETS, type ImageGenerationSettings, type QualityPreset } from '../workflow/imageFieldMap'
 
 const STORAGE_KEY = 'mobile-control:image-settings'
@@ -32,7 +33,10 @@ function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
 // Exported so ImageGenerateTab.tsx can hand this to remoteQueueStorage.ts's
 // useRemoteQueue, applying the exact same validation to each queued item as
 // a normal settings load gets.
-export function normalizeImageSettings(raw: unknown, defaults: ImageGenerationSettings = getDefaultImageSettings()): ImageGenerationSettings {
+export function normalizeImageSettings(
+  raw: unknown,
+  defaults: ImageGenerationSettings = getDefaultImageSettings(),
+): ImageGenerationSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const r = raw as Partial<ImageGenerationSettings>
   return {
@@ -48,10 +52,16 @@ export function normalizeImageSettings(raw: unknown, defaults: ImageGenerationSe
     samplerName: typeof r.samplerName === 'string' ? r.samplerName : defaults.samplerName,
     scheduler: typeof r.scheduler === 'string' ? r.scheduler : defaults.scheduler,
     denoise: typeof r.denoise === 'number' && Number.isFinite(r.denoise) ? r.denoise : defaults.denoise,
+    faceDetailer: typeof r.faceDetailer === 'boolean' ? r.faceDetailer : defaults.faceDetailer,
+    clipSkip: typeof r.clipSkip === 'number' && Number.isFinite(r.clipSkip) ? r.clipSkip : defaults.clipSkip,
+    faceDetailerSteps:
+      typeof r.faceDetailerSteps === 'number' && Number.isFinite(r.faceDetailerSteps) ? r.faceDetailerSteps : defaults.faceDetailerSteps,
     batchSize: typeof r.batchSize === 'number' && Number.isFinite(r.batchSize) ? r.batchSize : defaults.batchSize,
     batchCount: typeof r.batchCount === 'number' && Number.isFinite(r.batchCount) ? r.batchCount : defaults.batchCount,
     checkpoint: typeof r.checkpoint === 'string' ? r.checkpoint : defaults.checkpoint,
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, LORA_SLOT_COUNT),
+    img2img: typeof r.img2img === 'boolean' ? r.img2img : defaults.img2img,
+    inputImage: normalizeInputImage(r.inputImage),
   }
 }
 

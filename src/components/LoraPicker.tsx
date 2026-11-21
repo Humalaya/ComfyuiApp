@@ -51,12 +51,13 @@ export function LoraPicker({ options, tab, families, alreadyAdded, freeSlots, on
 
   return (
     <div className="popup-overlay" onClick={onClose}>
-      <div className="lora-picker" onClick={(e) => e.stopPropagation()}>
+      <div className="lora-picker" role="dialog" aria-label="LoRA seç" onClick={(e) => e.stopPropagation()}>
         <div className="lora-picker-header">
           <input
             type="search"
             className="lora-picker-search"
             placeholder="LoRA ara…"
+            aria-label="LoRA ara"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -94,7 +95,9 @@ export function LoraPicker({ options, tab, families, alreadyAdded, freeSlots, on
                 type="button"
                 title={name}
                 disabled={isAdded || (full && !isSelected)}
-                className={['lora-tile', isSelected ? 'lora-tile-selected' : '', isAdded ? 'lora-tile-added' : ''].filter(Boolean).join(' ')}
+                className={['lora-tile', isSelected ? 'lora-tile-selected' : '', isAdded ? 'lora-tile-added' : '']
+                  .filter(Boolean)
+                  .join(' ')}
                 onClick={() => toggle(name)}
               >
                 <span className="lora-tile-thumb">

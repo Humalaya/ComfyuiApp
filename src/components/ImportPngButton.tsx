@@ -39,7 +39,7 @@ export function ImportPngButton({ onImport }: Props) {
   return (
     <div className="field">
       <button type="button" className="secondary-button import-png-button" onClick={() => inputRef.current?.click()} disabled={busy}>
-        {busy ? 'PNG okunuyor…' : '📥 PNG\'den Ayarları İçe Aktar'}
+        {busy ? 'PNG okunuyor…' : "📥 PNG'den Ayarları İçe Aktar"}
       </button>
       <input
         ref={inputRef}

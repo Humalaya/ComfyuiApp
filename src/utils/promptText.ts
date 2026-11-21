@@ -23,7 +23,7 @@ export function appendTriggerWords(prompt: string, words: string): string {
 // because the prompt contains "light smile". A tag is compared ignoring
 // case, underscores vs spaces, and attention/weight wrapping, so
 // "(Blue_Eyes:1.2)" and "blue eyes" are the same tag.
-function normalizeTag(tag: string): string {
+export function normalizeTag(tag: string): string {
   return tag
     .trim()
     .replace(/^[([{]+/, '')
@@ -57,4 +57,28 @@ export function togglePromptTag(prompt: string, tag: string): string {
     .filter((segment) => normalizeTag(segment) !== target)
     .join(',')
     .replace(/^\s*,?\s*/, '')
+}
+
+// Inserts a tag where the user last had the cursor in the prompt box,
+// written as " tag," (the cheat sheet's format), and returns where the cursor
+// should go next so consecutive taps line up one after another. A cursor
+// in the middle of an existing tag is moved past that tag's comma first, so
+// nothing gets split.
+export function insertPromptTag(prompt: string, tag: string, cursor: number | null): { text: string; cursor: number } {
+  let pos = cursor === null ? prompt.length : Math.max(0, Math.min(cursor, prompt.length))
+  const prev = prompt.slice(0, pos).replace(/[ \t]+$/, '').slice(-1)
+  if (prev && prev !== ',' && prev !== '\n') {
+    const comma = prompt.indexOf(',', pos)
+    pos = comma === -1 ? prompt.length : comma + 1
+  }
+  let before = prompt.slice(0, pos)
+  const after = prompt.slice(pos)
+  // Inserting after a last tag that has no comma yet ("…, portrait|").
+  const last = before.replace(/\s+$/, '').slice(-1)
+  if (last && last !== ',' && last !== '\n') before = before.replace(/\s+$/, '') + ','
+  const lead = before === '' || /[ \n]$/.test(before) ? '' : ' '
+  const piece = `${lead}${tag},`
+  // Keep a space between the new comma and whatever tag follows it.
+  const trail = after && !/^\s/.test(after) ? ' ' : ''
+  return { text: before + piece + trail + after, cursor: before.length + piece.length }
 }

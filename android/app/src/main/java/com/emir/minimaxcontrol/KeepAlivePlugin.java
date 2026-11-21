@@ -49,10 +49,21 @@ public class KeepAlivePlugin extends Plugin {
         if (promptId != null) intent.putExtra("promptId", promptId);
         if (videoNodeId != null) intent.putExtra("videoNodeId", videoNodeId);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getContext().startForegroundService(intent);
-        } else {
-            getContext().startService(intent);
+        // Android 12+ refuses to start a foreground service while the app is
+        // in the background (ForegroundServiceStartNotAllowedException) — e.g.
+        // a job's id arriving after the screen locked. Uncaught, that killed
+        // the whole app (seen on the phone 2026-11-19, the app then relaunched
+        // as if it had "refreshed"). Reject instead: the JS side treats
+        // KeepAlive as best-effort and carries on.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                getContext().startForegroundService(intent);
+            } else {
+                getContext().startService(intent);
+            }
+        } catch (IllegalStateException | SecurityException e) {
+            call.reject("KeepAlive could not start: " + e.getMessage());
+            return;
         }
         call.resolve();
     }

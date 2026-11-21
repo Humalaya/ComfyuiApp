@@ -14,7 +14,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       host: true, // 0.0.0.0 üzerinde dinle, LAN'daki telefon erişebilsin
-      port: 5173,
+      // Development only. The phone (APK, :5173) loads the *built* app from
+      // server/index.js (see server/webapp.js) — `npm run deploy` updates it.
+      port: 5174,
+      strictPort: true,
       proxy: {
         '/comfy-api': {
           target: comfyTarget,

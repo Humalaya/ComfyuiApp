@@ -17,9 +17,15 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import crypto from 'node:crypto'
 import net from 'node:net'
+import os from 'node:os'
 import { execFile, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
+import { registerModelRoutes } from './models.js'
+import { registerPromptGenRoutes } from './promptgen.js'
+import { registerGalleryLockRoutes } from './galleryLock.js'
+import { recordPromptHistory, registerPromptLibraryRoutes } from './promptLibrary.js'
+import { appVersion, attachComfyWsProxy, comfyHttpProxy, serveBuiltApp } from './webapp.js'
 
 // Every browsable output folder is a named "source". Add more here (plus a
 // matching env var) to browse additional tools' output directories — each
@@ -278,7 +284,15 @@ function sendError(res, err, fallbackMessage) {
 // relative to the root too, so they plug straight into resolveSafePath.
 async function listDirectory(root, relPath) {
   const dirPath = relPath ? resolveSafePath(root, relPath) : root
-  const entries = await fs.readdir(dirPath, { withFileTypes: true })
+  let entries
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true })
+  } catch (err) {
+    // The source's own folder not existing yet (emptied by hand, nothing
+    // generated since — ComfyUI recreates it on the next save) is just empty.
+    if (err.code === 'ENOENT' && !relPath) return { folders: [], files: [] }
+    throw err
+  }
 
   const folders = []
   const fileNames = []
@@ -426,7 +440,14 @@ function requireGenerationKind(kind, res) {
 }
 
 const app = express()
+// The phone app's port (5173) is served from here — see webapp.js. Same
+// ComfyUI address the Vite dev proxy uses.
+const APP_PORT = Number(process.env.APP_PORT || 5173)
+const COMFY_PROXY_TARGET = process.env.VITE_COMFYUI_URL || 'http://127.0.0.1:8188'
+app.use(comfyHttpProxy(COMFY_PROXY_TARGET)) // before express.json: streams bodies through
 app.use(express.json({ limit: '50mb' })) // queued items carry their full ComfyUI workflow
+registerGalleryLockRoutes(app) // before the /api/outputs routes: guards them while locked
+registerPromptLibraryRoutes(app, GENERATION_KINDS)
 
 app.get('/api/outputs/sources', (_req, res) => {
   res.json(SOURCES.map(({ id, label, root }) => ({ id, label, configured: !!root })))
@@ -464,6 +485,64 @@ app.get('/api/outputs/download', async (req, res) => {
     res.download(filePath, path.basename(filePath))
   } catch (err) {
     sendError(res, err, 'Dosya bulunamadı.')
+  }
+})
+
+// Galeri's 🗑: moves an output into the desktop's own trash (freedesktop
+// Trash spec, ~/.local/share/Trash) instead of deleting it — restorable from
+// the file manager's Trash with "Restore", so a mis-tap on the phone isn't
+// permanent. Same disk as the outputs here, so it's a rename, not a copy.
+const TRASH_DIR = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'Trash')
+
+function trashDate(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+async function moveToTrash(filePath) {
+  await fs.mkdir(path.join(TRASH_DIR, 'files'), { recursive: true })
+  await fs.mkdir(path.join(TRASH_DIR, 'info'), { recursive: true })
+  const ext = path.extname(filePath)
+  const stem = path.basename(filePath, ext)
+  for (let i = 0; i < 1000; i++) {
+    const name = i === 0 ? `${stem}${ext}` : `${stem}.${i}${ext}`
+    const infoPath = path.join(TRASH_DIR, 'info', `${name}.trashinfo`)
+    let handle
+    try {
+      handle = await fs.open(infoPath, 'wx') // claims the name (spec: info first, exclusively)
+    } catch (err) {
+      if (err.code === 'EEXIST') continue
+      throw err
+    }
+    try {
+      const encoded = filePath.split('/').map(encodeURIComponent).join('/')
+      await handle.writeFile(`[Trash Info]\nPath=${encoded}\nDeletionDate=${trashDate()}\n`)
+    } finally {
+      await handle.close()
+    }
+    try {
+      await fs.rename(filePath, path.join(TRASH_DIR, 'files', name))
+    } catch (err) {
+      await fs.rm(infoPath, { force: true })
+      throw err
+    }
+    return name
+  }
+  throw new HttpError(500, 'Çöp kutusunda yer adı bulunamadı.')
+}
+
+app.post('/api/outputs/trash', async (req, res) => {
+  try {
+    const source = findSource(req.body?.source || 'video')
+    if (typeof req.body?.name !== 'string' || !req.body.name) throw new HttpError(400, 'Dosya adı eksik.')
+    const filePath = await resolveSafeRealPath(source.root, req.body.name)
+    assertBrowsableExt(filePath)
+    if (!(await fs.stat(filePath)).isFile()) throw new HttpError(400, 'Sadece dosyalar silinebilir.')
+    const trashed = await moveToTrash(filePath)
+    console.log(`[output-server] trashed ${source.id}/${req.body.name} -> Trash/${trashed}`)
+    res.json({ ok: true })
+  } catch (err) {
+    sendError(res, err, 'Dosya silinemedi.')
   }
 })
 
@@ -580,10 +659,15 @@ const CIVITAI_LEVEL_NSFW = 4 + 8 + 16
 // and answers in well under a second. civitai.com's copy of the endpoint is
 // SFW-only even when logged in, hence .red.
 // Undocumented — if its shape changes, this is the part to revisit.
-async function civitaiFeed({ sort, period, type, baseModels, withMeta, nsfwOnly, cursor }) {
+async function civitaiFeed({ sort, period, type, baseModels, modelVersionId, tagId, withMeta, nsfwOnly, cursor }) {
   const browsingLevel = nsfwOnly ? CIVITAI_LEVEL_NSFW : CIVITAI_LEVEL_ALL
   const input = { period, sort, browsingLevel, types: [type], withMeta, limit: 40 }
-  if (baseModels.length > 0) input.baseModels = baseModels
+  // A Civitai tag (category or any searched tag) — combines with the rest.
+  if (tagId) input.tags = [tagId]
+  // A specific model version (tapped in a post's resource list) — implies
+  // its base model, so the base model filter is left off then.
+  if (modelVersionId) input.modelVersionId = modelVersionId
+  else if (baseModels.length > 0) input.baseModels = baseModels
   if (cursor) input.cursor = cursor
   const body = await fetchCivitaiJson(`https://civitai.red/api/trpc/image.getInfinite?input=${encodeURIComponent(JSON.stringify({ json: input }))}`)
   let data = body?.result?.data
@@ -623,6 +707,8 @@ app.get('/api/civitai/images', async (req, res) => {
         type: req.query.type === 'video' ? 'video' : 'image',
         // Comma-separated; Civitai's base model names never contain commas.
         baseModels: typeof req.query.baseModels === 'string' ? req.query.baseModels.split(',').filter(Boolean) : [],
+        modelVersionId: Number.isInteger(Number(req.query.modelVersionId)) && Number(req.query.modelVersionId) > 0 ? Number(req.query.modelVersionId) : null,
+        tagId: Number.isInteger(Number(req.query.tagId)) && Number(req.query.tagId) > 0 ? Number(req.query.tagId) : null,
         withMeta: req.query.withMeta === 'true',
         nsfwOnly: req.query.nsfwOnly === 'true',
         cursor: typeof req.query.cursor === 'string' ? req.query.cursor : '',
@@ -630,6 +716,60 @@ app.get('/api/civitai/images', async (req, res) => {
     )
   } catch (err) {
     sendError(res, err, 'Civitai listesi alınamadı.')
+  }
+})
+
+// Civitai tags (tRPC, like the feed — undocumented). Without a query: the
+// site's own category list for images or models (a couple dozen, changes
+// rarely — cached); with one: tag-name search.
+async function civitaiTrpc(route, input) {
+  const body = await fetchCivitaiJson(`https://civitai.red/api/trpc/${route}?input=${encodeURIComponent(JSON.stringify({ json: input }))}`)
+  const data = body?.result?.data
+  return typeof data === 'string' ? civitaiUnflatten(JSON.parse(data)) : data?.json
+}
+
+const civitaiTagCategories = new Map() // kind -> { at, items }
+const TAG_CATEGORY_TTL = 6 * 60 * 60 * 1000
+
+app.get('/api/civitai/tags', async (req, res) => {
+  try {
+    const kind = req.query.kind === 'model' ? 'model' : 'image'
+    const entityType = [kind === 'model' ? 'Model' : 'Image']
+    const query = typeof req.query.query === 'string' ? req.query.query.trim().slice(0, 60) : ''
+    const trim = (items) =>
+      (Array.isArray(items) ? items : [])
+        .filter((t) => Number.isInteger(t?.id) && typeof t?.name === 'string')
+        .map((t) => ({ id: t.id, name: t.name, isCategory: !!t.isCategory }))
+    if (query) {
+      const data = await civitaiTrpc('tag.getAll', { entityType, query, limit: 40 })
+      return res.json({ items: trim(data?.items) })
+    }
+    const cached = civitaiTagCategories.get(kind)
+    if (cached && Date.now() - cached.at < TAG_CATEGORY_TTL) return res.json({ items: cached.items })
+    const data = await civitaiTrpc('tag.getAll', { entityType, categories: true, unlisted: false, limit: 100 })
+    const items = trim(data?.items).map((t) => ({ ...t, isCategory: true }))
+    civitaiTagCategories.set(kind, { at: Date.now(), items })
+    res.json({ items })
+  } catch (err) {
+    sendError(res, err, 'Civitai etiketleri alınamadı.')
+  }
+})
+
+// One post's tags (Civitai's automatic labels + user-added ones), most
+// confident first — the viewer shows them, a tap filters the feed by one.
+app.get('/api/civitai/image-tags', async (req, res) => {
+  try {
+    const id = Number(req.query.id)
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Geçersiz görsel.')
+    const data = await civitaiTrpc('tag.getVotableTags', { id, type: 'image' })
+    const seen = new Set()
+    const items = (Array.isArray(data) ? data : [])
+      .filter((t) => Number.isInteger(t?.id) && typeof t?.name === 'string' && !seen.has(t.id) && seen.add(t.id))
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .map((t) => ({ id: t.id, name: t.name }))
+    res.json({ items })
+  } catch (err) {
+    sendError(res, err, 'Görselin etiketleri alınamadı.')
   }
 })
 
@@ -695,6 +835,7 @@ app.get('/api/civitai/generation', async (req, res) => {
       width: p.width ?? p.aspectRatio?.width ?? null,
       height: p.height ?? p.aspectRatio?.height ?? null,
       resources: (data.resources ?? []).map((r) => ({
+        versionId: typeof r.id === 'number' ? r.id : null,
         name: r.model?.name ? `${r.model.name}${r.name ? ` — ${r.name}` : ''}` : r.name,
         type: r.model?.type ?? null,
         baseModel: r.baseModel ?? null,
@@ -797,6 +938,10 @@ function nodeTitles(workflow) {
 // queue) keeps removing a waiting item from the app meaningful, and means a
 // job started any other way (ComfyUI's own UI) is never jumped.
 let dispatching = false
+// Set at startup (see registerPromptGenRoutes below): while the prompt
+// generator has the GPU, no new ComfyUI job is started.
+let promptGen = null
+
 async function dispatchTick() {
   if (dispatching) return
   dispatching = true
@@ -821,6 +966,12 @@ async function dispatchTick() {
       }
     }
     if (active.size > 0) {
+      if (changed) saveGenState()
+      return
+    }
+
+    // The prompt generator's LLM holds the GPU — queued jobs wait for it.
+    if (promptGen?.holdsGpu()) {
       if (changed) saveGenState()
       return
     }
@@ -905,6 +1056,8 @@ app.post('/api/state/:kind/queue', async (req, res) => {
   for (const [i, it] of valid.entries()) {
     remoteQueues[req.params.kind].push({ id: crypto.randomUUID(), settings: it.settings ?? null, workflow: it.workflow, addedAt: now + i })
   }
+  // Identical prompts in a batch merge into one entry (its count goes up).
+  for (const it of valid.slice().reverse()) recordPromptHistory(req.params.kind, it.settings)
   lastQueueErrors[req.params.kind] = null
   saveGenState()
   await dispatchTick()
@@ -1133,6 +1286,37 @@ app.post('/api/system/suspend', async (_req, res) => {
     sendError(res, err, 'Uyku moduna geçilemedi.')
   }
 })
+
+// ✨ prompt generator — see promptgen.js.
+promptGen = registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFetch, comfyUrl: COMFY_LOCAL_URL })
+
+// Model downloads / Modeller view — see models.js.
+registerModelRoutes(app, {
+  HttpError,
+  sendError,
+  resolveSafePath,
+  resolveSafeRealPath,
+  civitaiHeaders,
+  fetchCivitaiJson,
+  findSource,
+  // Galeri's folders all live under ComfyUI's output/ — its size is what the
+  // storage card shows for "Galeri".
+  outputRoot: process.env.COMFYUI_OUTPUT_DIR
+    ? path.resolve(process.env.COMFYUI_OUTPUT_DIR)
+    : (SOURCES.find((s) => s.root)?.root && path.dirname(SOURCES.find((s) => s.root).root)) || null,
+})
+
+// The built app's version — the open app compares it to the one it loaded
+// with and offers a reload after a deploy.
+app.get('/api/app-version', (_req, res) => {
+  res.set('Cache-Control', 'no-store')
+  res.json({ version: appVersion() })
+})
+
+serveBuiltApp(app)
+
+const appServer = app.listen(APP_PORT, '0.0.0.0', () => console.log(`[output-server] app (dist/) on http://0.0.0.0:${APP_PORT}`))
+attachComfyWsProxy(appServer, COMFY_PROXY_TARGET)
 
 app.listen(PORT, () => {
   const rootsDesc = SOURCES.map((s) => `${s.label}=${s.root ?? 'AYARLANMADI'}`).join(', ')

@@ -8,17 +8,30 @@ import { appendTriggerWords } from './utils/promptText'
 import { StatusPanel } from './components/StatusPanel'
 import { GenerationFullscreenViewer } from './components/GenerationFullscreenViewer'
 import { Gallery, type ImportPayload } from './components/Gallery'
+import { GalleryLockGate } from './components/GalleryLock'
 import { ImageGenerateTab } from './components/ImageGenerateTab'
 import { Krea2GenerateTab } from './components/Krea2GenerateTab'
 import { Anime2RealGenerateTab } from './components/Anime2RealGenerateTab'
 import { SettingsTab } from './components/SettingsTab'
+import { UpdateBanner } from './components/UpdateBanner'
 import { UretDrawer, type UretView } from './components/UretDrawer'
 import { OpenWebUiFrame } from './components/OpenWebUiFrame'
 import { CivitaiBrowser } from './components/CivitaiBrowser'
+import type { ModelRef } from './components/CivitaiModelPage'
+import { ModelsView } from './components/ModelsView'
 import { HelpTip } from './components/HelpTip'
 import { randomSeed, SeedField } from './components/SeedField'
 import { exitApp, useRootBackHandler } from './native/backButton'
 import { modelLabel } from './utils/modelLabel'
+import {
+  applyVideoAlignment,
+  effectiveVideoSeconds,
+  hasImg2Vid,
+  hasRef2Vid,
+  toggleImg2Vid,
+  toggleRef2Vid,
+  videoTask,
+} from './workflow/videoPromptModes'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
 import { buildWorkflow, getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
@@ -27,6 +40,7 @@ import type { Krea2GenerationSettings } from './workflow/krea2FieldMap'
 import type { Anime2RealSettings } from './workflow/anime2realFieldMap'
 import { loadSettings, normalizeSettings, saveSettings } from './storage/settingsStorage'
 import { useRemoteQueue } from './storage/remoteQueueStorage'
+import { PromptGenerator } from './components/PromptGenerator'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -67,8 +81,9 @@ interface CompletedItem {
 // both still one tap away.
 //
 // Top nav is three entries: [ Üret ] [ Galeri ] [ ⚙ ]. "Üret" is not a plain
-// tab — a normal tap goes to whichever of its sub-views you last had open, a
-// long-press slides open a drawer to switch between them (see UretDrawer).
+// tab: a tap from Galeri/Ayarlar comes back to the sub-view you last had
+// open, a tap while already on it opens the drawer to switch (see
+// UretDrawer), and a long-press jumps back to the previous sub-view.
 // Galeri and Ayarlar (the gear) are ordinary tabs.
 type Tab = 'uret' | 'gallery' | 'settings'
 // UretView ('image' | 'video' | 'civitai' | 'openwebui') — the sub-views
@@ -77,11 +92,14 @@ type Tab = 'uret' | 'gallery' | 'settings'
 // 'openwebui' is the OpenWebUI instance on this same PC (:3000), embedded
 // as an iframe.
 
+const WIDE_VIEWS = new Set(['uret:civitai', 'uret:models', 'gallery'])
+
 const URET_VIEW_LABEL: Record<UretView, string> = {
   image: 'Görsel',
   video: 'Video',
   civitai: 'Civitai',
   openwebui: 'OpenWebUI',
+  models: 'Modeller',
 }
 
 // Which "Üret" sub-view to restore on next launch — a plain reload (screen
@@ -90,7 +108,7 @@ const URET_VIEW_KEY = 'mobile-control:uret-view'
 function loadUretView(): UretView {
   try {
     const v = localStorage.getItem(URET_VIEW_KEY)
-    if (v === 'image' || v === 'video' || v === 'civitai' || v === 'openwebui') return v
+    if (v === 'image' || v === 'video' || v === 'civitai' || v === 'openwebui' || v === 'models') return v
   } catch {
     /* private mode / unavailable — fall through to the default */
   }
@@ -126,6 +144,11 @@ export default function App() {
   // Same lazy-mount-then-keep idea for the Civitai browser — no reason to hit
   // Civitai's API on every app start for someone who never opens it.
   const [civitaiVisited, setCivitaiVisited] = useState(() => loadUretView() === 'civitai')
+  const [modelsVisited, setModelsVisited] = useState(() => loadUretView() === 'models')
+  // Modeller → "Civitai sayfası": opens that model's page in the Civitai view.
+  const [civitaiModelRequest, setCivitaiModelRequest] = useState<ModelRef | null>(null)
+  // The sub-view before the current one — long-press on Üret goes back to it.
+  const previousView = useRef<UretView | null>(null)
   const [imageModel, setImageModel] = useState<'sdxl' | 'krea2' | 'anime2real'>('sdxl')
   // See PendingImport above — null means "nothing pending", each tab only
   // reacts when `id` actually changes.
@@ -199,9 +222,11 @@ export default function App() {
   // tab — shared by the drawer, the nav button, and Gallery's "send to
   // create" hand-off below.
   function goToUret(view: UretView) {
+    if (view !== uretView) previousView.current = uretView
     setUretView(view)
     if (view === 'openwebui') setOpenWebUiVisited(true)
     if (view === 'civitai') setCivitaiVisited(true)
+    if (view === 'models') setModelsVisited(true)
     setTab('uret')
     setDrawerOpen(false)
   }
@@ -255,11 +280,12 @@ export default function App() {
     window.scrollTo(0, scrollByView.current.get(viewKey) ?? 0)
   }, [viewKey])
 
-  // Long-press on the "Üret" nav button opens the drawer; a normal tap just
-  // returns to the current sub-view. Pointer events (not touch+mouse both) so
-  // the handlers fire once, not twice, on a phone. The ref-tracked flag
-  // swallows the click that fires when the finger lifts after a long-press,
-  // so the drawer opening isn't immediately followed by a tab switch under it.
+  // The "Üret" nav button: a tap from another tab returns to the current
+  // sub-view, a tap while already there opens the drawer; a long-press
+  // jumps to the previous sub-view (quick back-and-forth between two).
+  // Pointer events (not touch+mouse both) so the handlers fire once, not
+  // twice, on a phone. The ref-tracked flag swallows the click that fires
+  // when the finger lifts after a long-press.
   const uretPressTimer = useRef<number | null>(null)
   const uretLongFired = useRef(false)
 
@@ -268,7 +294,9 @@ export default function App() {
     if (uretPressTimer.current) window.clearTimeout(uretPressTimer.current)
     uretPressTimer.current = window.setTimeout(() => {
       uretLongFired.current = true
-      setDrawerOpen(true)
+      const prev = previousView.current
+      if (prev && prev !== uretView) goToUret(prev)
+      else setTab('uret')
     }, 450)
   }
   function endUretPress() {
@@ -282,7 +310,8 @@ export default function App() {
       uretLongFired.current = false
       return
     }
-    setTab('uret')
+    if (tab === 'uret') setDrawerOpen(true)
+    else setTab('uret')
   }
 
   // Collects each finished result into the "recently finished" strip. The
@@ -399,7 +428,12 @@ export default function App() {
   const historyUrls = completedResults.map((r) => r.url)
 
   return (
-    <div className="app" style={{ '--header-height': `${headerHeight}px` } as CSSProperties}>
+    <div
+      // Browsing views spread out on a wide (desktop) screen — see .app-wide.
+      className={WIDE_VIEWS.has(viewKey) ? 'app app-wide' : 'app'}
+      style={{ '--header-height': `${headerHeight}px` } as CSSProperties}
+    >
+      <UpdateBanner />
       <header className="app-header" ref={headerRef}>
         <h1>MiniMax H3 Mobil Kontrol</h1>
         <nav className="tabs">
@@ -412,10 +446,13 @@ export default function App() {
             onPointerCancel={endUretPress}
             onContextMenu={(e) => e.preventDefault()}
             aria-haspopup="menu"
-            title="Uzun bas: Görsel / Video / Civitai / OpenWebUI"
+            title="Dokun: menü · Uzun bas: önceki ekran"
           >
             {URET_VIEW_LABEL[uretView]}
-            <span className="tab-caret" aria-hidden="true"> ▾</span>
+            <span className="tab-caret" aria-hidden="true">
+              {' '}
+              ▾
+            </span>
           </button>
           <button className={tab === 'gallery' ? 'tab tab-active' : 'tab'} onClick={() => setTab('gallery')}>
             Galeri
@@ -439,10 +476,18 @@ export default function App() {
           either generate tab. */}
       <div style={{ display: tab === 'uret' && uretView === 'image' ? 'block' : 'none' }}>
         <div className="seg seg-accent uret-model-seg">
-          <button type="button" className={imageModel === 'sdxl' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setImageModel('sdxl')}>
+          <button
+            type="button"
+            className={imageModel === 'sdxl' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => setImageModel('sdxl')}
+          >
             SDXL
           </button>
-          <button type="button" className={imageModel === 'krea2' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setImageModel('krea2')}>
+          <button
+            type="button"
+            className={imageModel === 'krea2' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => setImageModel('krea2')}
+          >
             Krea2 (FLUX)
           </button>
           <button
@@ -471,7 +516,9 @@ export default function App() {
       </div>
 
       <div style={{ display: tab === 'gallery' ? 'block' : 'none' }}>
-        <Gallery active={tab === 'gallery'} onSendToCreate={handleImport} />
+        <GalleryLockGate active={tab === 'gallery'}>
+          {(requestLock) => <Gallery active={tab === 'gallery'} onSendToCreate={handleImport} onLock={requestLock} />}
+        </GalleryLockGate>
       </div>
 
       <main className="form" style={{ display: tab === 'uret' && uretView === 'video' ? 'flex' : 'none' }}>
@@ -546,8 +593,47 @@ export default function App() {
         </div>
 
         <div className="field">
-          <label className="field-label">Prompt</label>
+          <div className="field-label" id="video-prompt-label">
+            Prompt
+            <HelpTip>
+              <b>img2vid</b>: prompt'un başına MiniMax'in "ilk kare" cümlesini ekler — İlk kare görseliyle kullanılır. <b>ref2vid</b>:
+              [reference generation] işaretini ekler (prompt'ta summary: varsa onun başına). İkisi birbirini dışlar; tekrar dokunmak
+              kaldırır. Metinler MiniMax H3'ün resmi prompt rehberinden.
+            </HelpTip>
+            <PromptGenerator
+              target="video"
+              // The task type follows the wired frames; the official keyframe
+              // line (with the final shot / duration) is added to every
+              // suggestion by the app, not written by the LLM.
+              context={`Task: ${videoTask(settings.inputImageEnabled && !!settings.inputImage, settings.lastFrameEnabled && !!settings.lastFrameImage)}; duration: ${effectiveVideoSeconds(settings.videoLengthSeconds).toFixed(2)} seconds`}
+              postProcess={(text) =>
+                applyVideoAlignment(
+                  text,
+                  videoTask(settings.inputImageEnabled && !!settings.inputImage, settings.lastFrameEnabled && !!settings.lastFrameImage),
+                  settings.videoLengthSeconds,
+                )
+              }
+              onUse={(text) => update('prompt', text)}
+            />
+          </div>
+          <div className="chip-row chip-row-flush">
+            <button
+              type="button"
+              className={hasImg2Vid(settings.prompt) ? 'chip chip-active' : 'chip'}
+              onClick={() => update('prompt', toggleImg2Vid(settings.prompt))}
+            >
+              img2vid
+            </button>
+            <button
+              type="button"
+              className={hasRef2Vid(settings.prompt) ? 'chip chip-active' : 'chip'}
+              onClick={() => update('prompt', toggleRef2Vid(settings.prompt))}
+            >
+              ref2vid
+            </button>
+          </div>
           <textarea
+            aria-labelledby="video-prompt-label"
             className="prompt-textarea"
             rows={6}
             value={settings.prompt}
@@ -557,8 +643,15 @@ export default function App() {
         </div>
 
         <div className="field">
-          <label className="field-label">En-Boy Oranı</label>
-          <select value={settings.aspectRatio} onChange={(e) => update('aspectRatio', e.target.value)} disabled={objectInfo.loading}>
+          <label className="field-label" htmlFor="video-en-boy-orani">
+            En-Boy Oranı
+          </label>
+          <select
+            id="video-en-boy-orani"
+            value={settings.aspectRatio}
+            onChange={(e) => update('aspectRatio', e.target.value)}
+            disabled={objectInfo.loading}
+          >
             {!objectInfo.aspectRatios.includes(settings.aspectRatio) && (
               <option value={settings.aspectRatio}>{settings.aspectRatio}</option>
             )}
@@ -572,12 +665,23 @@ export default function App() {
 
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Süre (saniye)</label>
-            <NumberField min={1} max={30} step={1} value={settings.videoLengthSeconds} onChange={(v) => update('videoLengthSeconds', v)} />
+            <label className="field-label" htmlFor="video-sure-saniye">
+              Süre (saniye)
+            </label>
+            <NumberField
+              id="video-sure-saniye"
+              min={1}
+              max={30}
+              step={1}
+              value={settings.videoLengthSeconds}
+              onChange={(v) => update('videoLengthSeconds', v)}
+            />
           </div>
           <div className="field">
-            <label className="field-label">FPS</label>
-            <NumberField min={8} max={60} step={1} value={settings.framerate} onChange={(v) => update('framerate', v)} />
+            <label className="field-label" htmlFor="video-fps">
+              FPS
+            </label>
+            <NumberField id="video-fps" min={8} max={60} step={1} value={settings.framerate} onChange={(v) => update('framerate', v)} />
           </div>
         </div>
 
@@ -589,11 +693,16 @@ export default function App() {
         />
 
         <div className="field">
-          <label className="field-label">Model</label>
-          <select value={settings.unetName} onChange={(e) => update('unetName', e.target.value)} disabled={objectInfo.loading}>
-            {!objectInfo.unetNames.includes(settings.unetName) && (
-              <option value={settings.unetName}>{settings.unetName}</option>
-            )}
+          <label className="field-label" htmlFor="video-model">
+            Model
+          </label>
+          <select
+            id="video-model"
+            value={settings.unetName}
+            onChange={(e) => update('unetName', e.target.value)}
+            disabled={objectInfo.loading}
+          >
+            {!objectInfo.unetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
             {objectInfo.unetNames.map((name) => (
               <option key={name} value={name}>
                 {modelLabel(name)}
@@ -612,34 +721,68 @@ export default function App() {
 
         <div className="field-row">
           <div className="field">
-            <label className="field-label">
+            <label className="field-label" htmlFor="video-megapiksel">
               Megapiksel
-              <HelpTip>Videonun çözünürlüğü — seçilen en-boy oranında toplam piksel sayısı (milyon). Yükseldikçe kalite de üretim süresi de artar.</HelpTip>
+              <HelpTip>
+                Videonun çözünürlüğü — seçilen en-boy oranında toplam piksel sayısı (milyon). Yükseldikçe kalite de üretim süresi de artar.
+              </HelpTip>
             </label>
-            <NumberField min={0.1} max={4} step={0.1} value={settings.megapixels} onChange={(v) => update('megapixels', v)} />
+            <NumberField
+              id="video-megapiksel"
+              min={0.1}
+              max={4}
+              step={0.1}
+              value={settings.megapixels}
+              onChange={(v) => update('megapixels', v)}
+            />
           </div>
           <div className="field">
-            <label className="field-label">Adım Sayısı</label>
-            <NumberField min={1} max={50} step={1} value={settings.totalSteps} onChange={(v) => update('totalSteps', v)} />
+            <label className="field-label" htmlFor="video-adim-sayisi">
+              Adım Sayısı
+            </label>
+            <NumberField
+              id="video-adim-sayisi"
+              min={1}
+              max={50}
+              step={1}
+              value={settings.totalSteps}
+              onChange={(v) => update('totalSteps', v)}
+            />
           </div>
         </div>
 
         <div className="field">
-          <label className="field-label">
+          <label className="field-label" htmlFor="video-batch-count">
             Batch Count
             <HelpTip>
-              Arka arkaya üretilecek video sayısı. Video modelinin gerçek batch desteği yok — her video ayrı bir iş olarak kuyruğa
-              eklenir, Sabit kapalıysa her birine yeni seed seçilir.
+              Arka arkaya üretilecek video sayısı. Video modelinin gerçek batch desteği yok — her video ayrı bir iş olarak kuyruğa eklenir,
+              Sabit kapalıysa her birine yeni seed seçilir.
             </HelpTip>
           </label>
-          <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
+          <NumberField
+            id="video-batch-count"
+            min={1}
+            max={20}
+            step={1}
+            value={settings.batchCount}
+            onChange={(v) => update('batchCount', v)}
+          />
         </div>
 
         <CollapsibleSection title="Gelişmiş Ayarlar">
           <div className="field">
-            <label className="field-label">Sampler</label>
-            <select value={settings.samplerName} onChange={(e) => update('samplerName', e.target.value)} disabled={objectInfo.loading}>
-              {!objectInfo.samplerNames.includes(settings.samplerName) && <option value={settings.samplerName}>{settings.samplerName}</option>}
+            <label className="field-label" htmlFor="video-sampler">
+              Sampler
+            </label>
+            <select
+              id="video-sampler"
+              value={settings.samplerName}
+              onChange={(e) => update('samplerName', e.target.value)}
+              disabled={objectInfo.loading}
+            >
+              {!objectInfo.samplerNames.includes(settings.samplerName) && (
+                <option value={settings.samplerName}>{settings.samplerName}</option>
+              )}
               {objectInfo.samplerNames.map((name) => (
                 <option key={name} value={name}>
                   {name}
@@ -648,8 +791,15 @@ export default function App() {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">Scheduler</label>
-            <select value={settings.scheduler} onChange={(e) => update('scheduler', e.target.value)} disabled={objectInfo.loading}>
+            <label className="field-label" htmlFor="video-scheduler">
+              Scheduler
+            </label>
+            <select
+              id="video-scheduler"
+              value={settings.scheduler}
+              onChange={(e) => update('scheduler', e.target.value)}
+              disabled={objectInfo.loading}
+            >
               {!objectInfo.schedulerNames.includes(settings.scheduler) && <option value={settings.scheduler}>{settings.scheduler}</option>}
               {objectInfo.schedulerNames.map((name) => (
                 <option key={name} value={name}>
@@ -659,8 +809,10 @@ export default function App() {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">Denoise</label>
-            <NumberField min={0} max={1} step={0.01} value={settings.denoise} onChange={(v) => update('denoise', v)} />
+            <label className="field-label" htmlFor="video-denoise">
+              Denoise
+            </label>
+            <NumberField id="video-denoise" min={0} max={1} step={0.01} value={settings.denoise} onChange={(v) => update('denoise', v)} />
           </div>
         </CollapsibleSection>
 
@@ -672,7 +824,21 @@ export default function App() {
       </main>
 
       <div style={{ display: tab === 'uret' && uretView === 'civitai' ? 'block' : 'none' }}>
-        {civitaiVisited && <CivitaiBrowser onSendToCreate={handleImport} />}
+        {civitaiVisited && (
+          <CivitaiBrowser onSendToCreate={handleImport} onOpenModels={() => goToUret('models')} modelRequest={civitaiModelRequest} />
+        )}
+      </div>
+
+      <div style={{ display: tab === 'uret' && uretView === 'models' ? 'block' : 'none' }}>
+        {modelsVisited && (
+          <ModelsView
+            active={tab === 'uret' && uretView === 'models'}
+            onOpenCivitaiModel={(ref) => {
+              setCivitaiModelRequest({ ...ref })
+              goToUret('civitai')
+            }}
+          />
+        )}
       </div>
 
       {/* Not display:none like the other views: that collapses the iframe's
@@ -688,12 +854,7 @@ export default function App() {
 
       {exitHint && <div className="app-toast">Çıkmak için tekrar geri bas</div>}
 
-      <UretDrawer
-        open={drawerOpen}
-        current={uretView}
-        onSelect={goToUret}
-        onClose={() => setDrawerOpen(false)}
-      />
+      <UretDrawer open={drawerOpen} current={uretView} onSelect={goToUret} onClose={() => setDrawerOpen(false)} />
 
       {viewerUrl !== null && (
         <GenerationFullscreenViewer

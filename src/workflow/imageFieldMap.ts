@@ -1,4 +1,5 @@
 import imageTemplateJson from './imageTemplate.json'
+import { applyImg2Img, type InputImageRef } from './img2img'
 import type { ComfyWorkflow } from '../api/comfyClient'
 import { LORA_SLOT_COUNT, type LoraSlot } from './fieldMap'
 
@@ -16,6 +17,8 @@ import { LORA_SLOT_COUNT, type LoraSlot } from './fieldMap'
 export const IMAGE_NODE_IDS = {
   positivePrompt: '3',
   negativePrompt: '4',
+  positiveEncode: '36', // CLIPTextEncode fed by 3 → 39 (RegexReplace)
+  negativeEncode: '38',
   width: '1',
   height: '11',
   steps: '17',
@@ -26,6 +29,13 @@ export const IMAGE_NODE_IDS = {
   loraLoader: '27',
   sampler: '41', // KSampler — sampler_name/scheduler are literal here
   denoiseValue: '35', // "easy float" node KSampler.denoise links to
+  // FaceDetailerPipe — the face touch-up pass after the main sampler.
+  faceDetailer: '31',
+  clipSkip: '51', // CLIPSetLastLayer — stop_at_clip_layer = -clipSkip
+  decode: '33', // VAEDecode of the main sampler — the image before touch-up
+  saveImage: '50',
+  vaeSwitch: '34', // the VAE everything decodes/encodes with
+  comparer: '57', // Image Comparer (before/after), only meaningful with the touch-up
 } as const
 
 // The output actually worth watching in ComfyUI's /history: node 31
@@ -84,6 +94,17 @@ export interface ImageGenerationSettings {
   batchCount: number
   checkpoint: string
   loras: LoraSlot[]
+  // FaceDetailer pass: re-renders detected faces at higher resolution after
+  // the main image. Off → the main sampler's image is saved as is.
+  faceDetailer: boolean
+  faceDetailerSteps: number
+  // A1111-style clip skip (2 → CLIPSetLastLayer -2).
+  clipSkip: number
+  // img2img (see img2img.ts): start from this picture instead of an empty
+  // latent; `denoise` says how much of it changes. inputImage is remembered
+  // while img2img is off.
+  img2img: boolean
+  inputImage: InputImageRef | null
 }
 
 function readImageLoraSlots(): LoraSlot[] {
@@ -120,6 +141,47 @@ export function getDefaultImageSettings(): ImageGenerationSettings {
     batchCount: 1,
     checkpoint: String(t[IMAGE_NODE_IDS.checkpoint].inputs.ckpt_name ?? ''),
     loras: readImageLoraSlots(),
+    faceDetailer: true,
+    faceDetailerSteps: Number(t[IMAGE_NODE_IDS.faceDetailer].inputs.steps ?? 14),
+    clipSkip: Math.abs(Number(t[IMAGE_NODE_IDS.clipSkip].inputs.stop_at_clip_layer ?? -2)),
+    img2img: false,
+    inputImage: null,
+  }
+}
+
+// A1111-style BREAK, which ComfyUI's CLIPTextEncode doesn't know (it would
+// just read the word "break"). BREAK means "encode the next part as its own
+// CLIP chunk" — in ComfyUI that's encoding each part separately and joining
+// them with ConditioningConcat. Keeps one person's colors / clothes from
+// bleeding into another's. The first part stays in the template's own
+// wildcard → regex → encode chain; every later part gets its own encoder,
+// and whatever used the template's encoder (KSampler, the face detailer
+// pipe) is rewired to the end of the concat chain.
+export function splitBreak(text: string): string[] {
+  return text
+    .split(/\bBREAK\b/)
+    .map((part) => part.trim().replace(/^[\s,]+|[\s,]+$/g, ''))
+    .filter(Boolean)
+}
+
+function applyBreakChunks(workflow: ComfyWorkflow, encoderId: string, clip: unknown, parts: string[], idBase: number) {
+  let prev: [string, number] = [encoderId, 0]
+  parts.forEach((part, i) => {
+    const enc = String(idBase + i * 2)
+    const cat = String(idBase + i * 2 + 1)
+    workflow[enc] = { class_type: 'CLIPTextEncode', inputs: { text: part, clip } } as ComfyWorkflow[string]
+    workflow[cat] = {
+      class_type: 'ConditioningConcat',
+      inputs: { conditioning_to: prev, conditioning_from: [enc, 0] },
+    } as ComfyWorkflow[string]
+    prev = [cat, 0]
+  })
+  const added = new Set(parts.flatMap((_, i) => [String(idBase + i * 2), String(idBase + i * 2 + 1)]))
+  for (const [id, node] of Object.entries(workflow)) {
+    if (added.has(id)) continue
+    for (const [key, value] of Object.entries(node.inputs)) {
+      if (Array.isArray(value) && value[0] === encoderId && value[1] === 0) (node.inputs as Record<string, unknown>)[key] = prev
+    }
   }
 }
 
@@ -140,12 +202,18 @@ export function buildImageWorkflow(settings: ImageGenerationSettings): ComfyWork
   // downstream (via RegexReplace → CLIPTextEncode). The mobile UI's prompt
   // has no wildcard syntax in it, so populating is a no-op either way —
   // setting both keeps them consistent regardless.
+  const [positiveHead, ...positiveRest] = splitBreak(finalPositive)
+  const [negativeHead, ...negativeRest] = splitBreak(finalNegative)
   const positiveInputs = workflow[IMAGE_NODE_IDS.positivePrompt].inputs as Record<string, unknown>
-  positiveInputs.wildcard_text = finalPositive
-  positiveInputs.populated_text = finalPositive
+  positiveInputs.wildcard_text = positiveHead ?? ''
+  positiveInputs.populated_text = positiveHead ?? ''
   const negativeInputs = workflow[IMAGE_NODE_IDS.negativePrompt].inputs as Record<string, unknown>
-  negativeInputs.wildcard_text = finalNegative
-  negativeInputs.populated_text = finalNegative
+  negativeInputs.wildcard_text = negativeHead ?? ''
+  negativeInputs.populated_text = negativeHead ?? ''
+  // Same CLIP (after clip skip + LoRAs) the template's encoders use.
+  const clip = workflow[IMAGE_NODE_IDS.positiveEncode].inputs.clip
+  if (positiveRest.length) applyBreakChunks(workflow, IMAGE_NODE_IDS.positiveEncode, clip, positiveRest, 9100)
+  if (negativeRest.length) applyBreakChunks(workflow, IMAGE_NODE_IDS.negativeEncode, clip, negativeRest, 9200)
 
   workflow[IMAGE_NODE_IDS.width].inputs.value = settings.width
   workflow[IMAGE_NODE_IDS.height].inputs.value = settings.height
@@ -156,7 +224,9 @@ export function buildImageWorkflow(settings: ImageGenerationSettings): ComfyWork
   workflow[IMAGE_NODE_IDS.sampler].inputs.scheduler = settings.scheduler
   // Overwrites the link to node 35 with a literal — same reasoning as the
   // video tab's identical override in fieldMap.ts.
-  workflow[IMAGE_NODE_IDS.sampler].inputs.denoise = settings.denoise
+  // img2img switched on but no picture picked: a plain generation, which
+  // needs the full denoise (its img2img strength would leave noise).
+  workflow[IMAGE_NODE_IDS.sampler].inputs.denoise = settings.img2img && !settings.inputImage ? 1 : settings.denoise
   workflow[IMAGE_NODE_IDS.seed].inputs.seed = settings.seed
   workflow[IMAGE_NODE_IDS.checkpoint].inputs.ckpt_name = settings.checkpoint
 
@@ -164,6 +234,30 @@ export function buildImageWorkflow(settings: ImageGenerationSettings): ComfyWork
   settings.loras.forEach((slot, i) => {
     loraInputs[`lora_${i + 1}`] = { on: slot.on, lora: slot.lora, strength: slot.strength }
   })
+
+  if (settings.img2img && settings.inputImage) {
+    applyImg2Img(workflow, {
+      image: settings.inputImage,
+      vae: [IMAGE_NODE_IDS.vaeSwitch, 0],
+      width: settings.width,
+      height: settings.height,
+      batchSize: settings.batchSize,
+      target: { node: IMAGE_NODE_IDS.sampler, input: 'latent_image' },
+    })
+  }
+
+  workflow[IMAGE_NODE_IDS.clipSkip].inputs.stop_at_clip_layer = -Math.max(1, Math.round(settings.clipSkip))
+
+  if (settings.faceDetailer) {
+    workflow[IMAGE_NODE_IDS.faceDetailer].inputs.steps = settings.faceDetailerSteps
+  } else {
+    // Save the main sampler's image directly. The detailer and the
+    // before/after comparer are removed; the detector/pipe nodes left
+    // behind feed no output, so ComfyUI doesn't run them.
+    workflow[IMAGE_NODE_IDS.saveImage].inputs.images = [IMAGE_NODE_IDS.decode, 0]
+    delete workflow[IMAGE_NODE_IDS.faceDetailer]
+    delete workflow[IMAGE_NODE_IDS.comparer]
+  }
 
   return workflow
 }

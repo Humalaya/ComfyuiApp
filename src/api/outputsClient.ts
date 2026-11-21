@@ -45,6 +45,16 @@ export async function listOutputs(source: string, path: string): Promise<OutputL
   return asJson(res)
 }
 
+// Moves the file into the PC's trash (restorable there) — see server/index.js.
+export async function trashOutput(source: string, name: string): Promise<void> {
+  const res = await fetch('/api/outputs/trash', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, name }),
+  })
+  await asJson(res)
+}
+
 export function outputFileUrl(source: string, name: string): string {
   return `/api/outputs/file?source=${encodeURIComponent(source)}&name=${encodeURIComponent(name)}`
 }
@@ -73,3 +83,22 @@ const MIME_TYPES: Record<string, string> = {
 export function outputMimeType(ext: string): string {
   return MIME_TYPES[ext.toLowerCase()] ?? 'application/octet-stream'
 }
+
+// Galeri kilidi (server/galleryLock.js): while locked, the server refuses
+// every outputs route but /sources.
+export async function getGalleryLock(): Promise<boolean> {
+  const res = await fetch('/api/gallery-lock', { cache: 'no-store' })
+  return (await asJson<{ locked: boolean }>(res)).locked
+}
+
+async function postGalleryLock(action: 'lock' | 'unlock', password: string): Promise<boolean> {
+  const res = await fetch(`/api/gallery-lock/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+  return (await asJson<{ locked: boolean }>(res)).locked
+}
+
+export const lockGallery = (password: string) => postGalleryLock('lock', password)
+export const unlockGallery = (password: string) => postGalleryLock('unlock', password)

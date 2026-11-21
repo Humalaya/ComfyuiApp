@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useBackHandler } from '../native/backButton'
 
-export type UretView = 'image' | 'video' | 'civitai' | 'openwebui'
+export type UretView = 'image' | 'video' | 'civitai' | 'openwebui' | 'models'
 
 interface Props {
   open: boolean
@@ -14,6 +14,7 @@ const ITEMS: { id: UretView; label: string; icon: string }[] = [
   { id: 'image', label: 'Görsel', icon: '🖼️' },
   { id: 'video', label: 'Video', icon: '🎬' },
   { id: 'civitai', label: 'Civitai', icon: '🌐' },
+  { id: 'models', label: 'Modeller', icon: '📦' },
   { id: 'openwebui', label: 'OpenWebUI', icon: '💬' },
 ]
 
@@ -33,11 +34,7 @@ export function UretDrawer({ open, current, onSelect, onClose }: Props) {
   }, [open, onClose])
 
   return (
-    <div
-      className={open ? 'drawer-overlay drawer-overlay-open' : 'drawer-overlay'}
-      onClick={onClose}
-      aria-hidden={!open}
-    >
+    <div className={open ? 'drawer-overlay drawer-overlay-open' : 'drawer-overlay'} onClick={onClose} aria-hidden={!open}>
       <div className="drawer-panel" onClick={(e) => e.stopPropagation()} role="menu" aria-label="Üret">
         <div className="drawer-title">Üret</div>
         {ITEMS.map((it) => (

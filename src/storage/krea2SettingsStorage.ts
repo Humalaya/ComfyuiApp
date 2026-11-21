@@ -3,6 +3,7 @@
 // shape differs (22 LoRA slots instead of 10, no checkpoint/cfg/steps —
 // see krea2FieldMap.ts for why).
 import { type LoraSlot } from '../workflow/fieldMap'
+import { normalizeInputImage } from '../workflow/img2img'
 import { getDefaultKrea2Settings, KREA2_LORA_SLOT_COUNT, type Krea2GenerationSettings } from '../workflow/krea2FieldMap'
 
 const STORAGE_KEY = 'mobile-control:krea2-settings'
@@ -22,7 +23,10 @@ function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
   })
 }
 
-export function normalizeKrea2Settings(raw: unknown, defaults: Krea2GenerationSettings = getDefaultKrea2Settings()): Krea2GenerationSettings {
+export function normalizeKrea2Settings(
+  raw: unknown,
+  defaults: Krea2GenerationSettings = getDefaultKrea2Settings(),
+): Krea2GenerationSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const r = raw as Partial<Krea2GenerationSettings>
   return {
@@ -43,6 +47,8 @@ export function normalizeKrea2Settings(raw: unknown, defaults: Krea2GenerationSe
     scheduler2: typeof r.scheduler2 === 'string' ? r.scheduler2 : defaults.scheduler2,
     denoise2: typeof r.denoise2 === 'number' && Number.isFinite(r.denoise2) ? r.denoise2 : defaults.denoise2,
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, KREA2_LORA_SLOT_COUNT),
+    img2img: typeof r.img2img === 'boolean' ? r.img2img : defaults.img2img,
+    inputImage: normalizeInputImage(r.inputImage),
   }
 }
 

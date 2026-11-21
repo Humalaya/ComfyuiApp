@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useOutputBrowser, useOutputSources } from '../hooks/useOutputBrowser'
-import { outputFileUrl, outputThumbnailUrl, type OutputFile } from '../api/outputsClient'
+import { outputFileUrl, outputThumbnailUrl, trashOutput, type OutputFile } from '../api/outputsClient'
 import { extractA1111PositivePrompt, extractShareableMetadataText, parseComfyWorkflowJson, readPngTextChunks } from '../utils/pngMetadata'
 import { extractSettingsFromPrompt } from '../workflow/pngImport'
 import { extractImageSettingsFromPrompt } from '../workflow/imagePngImport'
@@ -14,6 +14,7 @@ import { FullscreenViewer } from './FullscreenViewer'
 import { HelpTip } from './HelpTip'
 import { useBackHandler } from '../native/backButton'
 import { MetadataModal } from './MetadataModal'
+import { DiskUsage } from './DiskUsage'
 
 const PAGE_SIZE = 60
 
@@ -55,6 +56,8 @@ interface Props {
   // a folder while it is.
   active: boolean
   onSendToCreate: (payload: ImportPayload) => void
+  // Opens the "Galeriyi kilitle" password dialog (GalleryLock.tsx).
+  onLock: () => void
 }
 
 // Tiles sit inside a dated folder already — the time of day is what's left
@@ -62,7 +65,9 @@ interface Props {
 function formatTime(mtimeMs: number): string {
   const d = new Date(mtimeMs)
   const time = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })} ${time}`
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })} ${time}`
 }
 
 function formatSize(bytes: number): string {
@@ -74,7 +79,7 @@ function folderLabel(fullPath: string): string {
   return fullPath.slice(fullPath.lastIndexOf('/') + 1)
 }
 
-export function Gallery({ active, onSendToCreate }: Props) {
+export function Gallery({ active, onSendToCreate, onLock }: Props) {
   const { sources, loading: sourcesLoading } = useOutputSources()
   // 'video' first/default — matches the tab order (Video, Krea, SDXL) and
   // this app's own "video generation" starting point. The effect below
@@ -91,9 +96,18 @@ export function Gallery({ active, onSendToCreate }: Props) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
   const activeItem = activeIndex !== null ? (items[activeIndex] ?? null) : null
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  // After a refresh that adds files (🔍 Büyüt saves beside the shown one,
+  // and the newest-first listing shifts), keeps the viewer on the same file.
+  const followName = useRef<string | null>(null)
+  useEffect(() => {
+    if (!followName.current) return
+    const idx = items.findIndex((f) => f.name === followName.current)
+    followName.current = null
+    if (idx !== -1) setActiveIndex(idx)
+  }, [items])
   const [metadata, setMetadata] = useState<MetadataState | null>(null)
   const [metadataLoadingName, setMetadataLoadingName] = useState<string | null>(null)
-  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | 'anime2real' | null>(null)
+  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | 'anime2real' | 'sdxl' | 'krea2' | null>(null)
   // The subfolder path you just came *up* from, so it can be highlighted in
   // its parent's folder list — a plain "Geri" with no other cue made it easy
   // to lose track of which folder you were just in, especially in a source
@@ -296,6 +310,21 @@ export function Gallery({ active, onSendToCreate }: Props) {
     }
   }
 
+  // This PNG as the SDXL / Krea2 tab's img2img starting picture.
+  async function handleSendToImg2Img(kind: 'sdxl' | 'krea2') {
+    if (!metadata?.imageBlob) return
+    setSendingAction(kind)
+    try {
+      const inputImage = await uploadCurrentImage()
+      if (inputImage) onSendToCreate({ kind, settings: { img2img: true, inputImage } })
+      setMetadata(null)
+    } catch (err) {
+      alert(`Görsel gönderilemedi: ${(err as Error).message}`)
+    } finally {
+      setSendingAction(null)
+    }
+  }
+
   const visibleFiles = items.slice(0, visibleCount)
 
   return (
@@ -303,12 +332,19 @@ export function Gallery({ active, onSendToCreate }: Props) {
       {sources.length > 1 && (
         <div className="seg seg-accent">
           {sources.map((s) => (
-            <button key={s.id} type="button" className={s.id === source ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => switchSource(s.id)}>
+            <button
+              key={s.id}
+              type="button"
+              className={s.id === source ? 'seg-btn seg-btn-active' : 'seg-btn'}
+              onClick={() => switchSource(s.id)}
+            >
               {s.label}
             </button>
           ))}
         </div>
       )}
+
+      <DiskUsage active={active} refreshKey={source} />
 
       <div className="gallery-toolbar">
         {currentPath ? (
@@ -321,16 +357,17 @@ export function Gallery({ active, onSendToCreate }: Props) {
         <button type="button" className="icon-button" onClick={refresh} disabled={loading} aria-label="Yenile">
           {loading ? <span className="spinner spinner-small" /> : '↻'}
         </button>
+        <button type="button" className="icon-button" onClick={onLock} aria-label="Galeriyi kilitle" title="Galeriyi kilitle">
+          🔒
+        </button>
         <HelpTip>
-          Büyütmek için bir dosyaya dokun; büyütülmüş görünümde sağa-sola kaydırarak geçiş yapabilirsin. Kaydetmek/paylaşmak için
-          büyütülmüş dosyanın üzerine uzun bas. PNG'lerdeki 📋 düğmesi üretim ayarlarını gösterir ve Oluştur sekmelerine gönderir.
+          Büyütmek için bir dosyaya dokun; büyütülmüş görünümde sağa-sola kaydırarak geçiş yapabilirsin. Kaydetmek/paylaşmak için büyütülmüş
+          dosyanın üzerine uzun bas. PNG'lerdeki 📋 düğmesi üretim ayarlarını gösterir ve Oluştur sekmelerine gönderir.
         </HelpTip>
       </div>
 
       {error && <div className="field-error">{error}</div>}
-      {!loading && !error && folders.length === 0 && items.length === 0 && (
-        <div className="empty-state">Bu klasörde henüz dosya yok.</div>
-      )}
+      {!loading && !error && folders.length === 0 && items.length === 0 && <div className="empty-state">Bu klasörde henüz dosya yok.</div>}
 
       {folders.length > 0 && (
         <div className="folder-grid">
@@ -406,6 +443,22 @@ export function Gallery({ active, onSendToCreate }: Props) {
         onNext={() => setActiveIndex((i) => (i !== null && i < items.length - 1 ? i + 1 : i))}
         onClose={() => setActiveIndex(null)}
         onMetadata={activeItem?.ext === '.png' ? () => loadMetadata(activeItem) : undefined}
+        onUpscaled={() => {
+          followName.current = activeItem?.name ?? null
+          refresh()
+        }}
+        onDelete={
+          activeItem
+            ? async () => {
+                await trashOutput(source, activeItem.name)
+                // Stay on the same position — it now shows the next file
+                // (or the previous one when the last was deleted).
+                const remaining = items.length - 1
+                await refresh()
+                setActiveIndex((i) => (remaining <= 0 || i === null ? null : Math.min(i, remaining - 1)))
+              }
+            : undefined
+        }
       />
       <MetadataModal
         title={metadata?.title ?? null}
@@ -421,6 +474,8 @@ export function Gallery({ active, onSendToCreate }: Props) {
         sendingImage={sendingAction === 'image'}
         onSendToAnime2Real={metadata?.imageBlob ? handleSendToAnime2Real : undefined}
         sendingAnime2Real={sendingAction === 'anime2real'}
+        onSendToImg2Img={metadata?.imageBlob ? handleSendToImg2Img : undefined}
+        sendingImg2Img={sendingAction === 'sdxl' || sendingAction === 'krea2' ? sendingAction : null}
       />
     </div>
   )

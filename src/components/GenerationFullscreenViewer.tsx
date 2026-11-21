@@ -45,7 +45,7 @@ export function GenerationFullscreenViewer({ items, index, onIndexChange, onClos
   if (!item) return null
 
   return (
-    <div className="popup-overlay" onClick={onClose}>
+    <div role="dialog" aria-modal="true" className="popup-overlay" onClick={onClose}>
       <div className="popup-content" onClick={(e) => e.stopPropagation()} {...swipe}>
         <button type="button" className="popup-close" onClick={onClose} aria-label="Kapat">
           ✕

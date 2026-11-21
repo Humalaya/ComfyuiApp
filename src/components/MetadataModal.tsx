@@ -13,6 +13,9 @@ interface Props {
   // Use this PNG as Anime2Real's input picture.
   onSendToAnime2Real?: () => void
   sendingAnime2Real?: boolean
+  // The picture as the SDXL / Krea2 tab's img2img input.
+  onSendToImg2Img?: (kind: 'sdxl' | 'krea2') => void
+  sendingImg2Img?: 'sdxl' | 'krea2' | null
 }
 
 // Shows the extracted PNG metadata directly — no download of the image
@@ -37,18 +40,20 @@ export function MetadataModal({
   sendingImage,
   onSendToAnime2Real,
   sendingAnime2Real,
+  onSendToImg2Img,
+  sendingImg2Img,
 }: Props) {
   useBackHandler(text !== null, onClose)
   if (text === null) return null
 
-  const busy = !!sendingSettings || !!sendingImage || !!sendingAnime2Real
+  const busy = !!sendingSettings || !!sendingImage || !!sendingAnime2Real || !!sendingImg2Img
 
   async function handleShare() {
     await shareText(title ?? 'Metadata', text!)
   }
 
   return (
-    <div className="popup-overlay" onClick={onClose}>
+    <div role="dialog" aria-modal="true" className="popup-overlay" onClick={onClose}>
       <div className="metadata-modal" onClick={(e) => e.stopPropagation()}>
         <div className="metadata-modal-header">
           <span className="metadata-modal-title" title={title ?? undefined}>
@@ -82,6 +87,18 @@ export function MetadataModal({
               {sendingAnime2Real ? 'Gönderiliyor…' : "🎨 Anime2Real'e Gönder"}
             </button>
           )}
+          {onSendToImg2Img &&
+            (['sdxl', 'krea2'] as const).map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                className="secondary-button metadata-send-button"
+                onClick={() => onSendToImg2Img(kind)}
+                disabled={busy}
+              >
+                {sendingImg2Img === kind ? 'Gönderiliyor…' : `🖼️ ${kind === 'sdxl' ? 'SDXL' : 'Krea2'} img2img`}
+              </button>
+            ))}
         </div>
       </div>
     </div>

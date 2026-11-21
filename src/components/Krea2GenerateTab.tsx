@@ -6,6 +6,8 @@ import { ResultCarousel } from './ResultCarousel'
 import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
 import { CollapsibleSection } from './CollapsibleSection'
 import { HelpTip } from './HelpTip'
+import { Img2ImgSection } from './Img2ImgSection'
+import { IMG2IMG_DEFAULT_DENOISE } from '../workflow/img2img'
 import { randomSeed, SeedField } from './SeedField'
 import { modelLabel } from '../utils/modelLabel'
 import { useObjectInfo } from '../hooks/useObjectInfo'
@@ -15,7 +17,7 @@ import type { LoraSlot } from '../workflow/fieldMap'
 import { loadKrea2Settings, normalizeKrea2Settings, saveKrea2Settings } from '../storage/krea2SettingsStorage'
 import { appendTriggerWords } from '../utils/promptText'
 import { useRemoteQueue } from '../storage/remoteQueueStorage'
-
+import { PromptGenerator } from './PromptGenerator'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -86,7 +88,12 @@ export function Krea2GenerateTab({ importRequest }: Props) {
   // identical effect) — reacts only to `id` changing.
   useEffect(() => {
     if (!importRequest) return
-    setSettings((s) => ({ ...s, ...importRequest.settings }))
+    setSettings((s) => {
+      const next = { ...s, ...importRequest.settings }
+      // A picture sent here for img2img while denoise still says 1 (= ignore it).
+      if (importRequest.settings.img2img && next.denoise1 >= 1) next.denoise1 = IMG2IMG_DEFAULT_DENOISE
+      return next
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 
@@ -211,8 +218,15 @@ export function Krea2GenerateTab({ importRequest }: Props) {
       )}
 
       <div className="field">
-        <label className="field-label">Model</label>
-        <select value={settings.unetName} onChange={(e) => update('unetName', e.target.value)} disabled={objectInfo.loading}>
+        <label className="field-label" htmlFor="krea2-model">
+          Model
+        </label>
+        <select
+          id="krea2-model"
+          value={settings.unetName}
+          onChange={(e) => update('unetName', e.target.value)}
+          disabled={objectInfo.loading}
+        >
           {!objectInfo.krea2UnetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
           {objectInfo.krea2UnetNames.map((name) => (
             <option key={name} value={name}>
@@ -223,8 +237,12 @@ export function Krea2GenerateTab({ importRequest }: Props) {
       </div>
 
       <div className="field">
-        <label className="field-label">Prompt</label>
+        <div className="field-label" id="krea2-prompt-label">
+          Prompt
+          <PromptGenerator target="krea2" onUse={(text) => update('prompt', text)} />
+        </div>
         <textarea
+          aria-labelledby="krea2-prompt-label"
           className="prompt-textarea"
           rows={6}
           value={settings.prompt}
@@ -233,48 +251,75 @@ export function Krea2GenerateTab({ importRequest }: Props) {
         />
       </div>
 
+      <Img2ImgSection
+        idPrefix="krea2"
+        enabled={settings.img2img}
+        image={settings.inputImage}
+        denoise={settings.denoise1}
+        width={settings.width}
+        height={settings.height}
+        onChange={({ denoise, ...patch }) =>
+          setSettings((s) => ({ ...s, ...patch, ...(denoise !== undefined ? { denoise1: denoise } : {}) }))
+        }
+      />
+
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Genişlik</label>
-          <NumberField min={64} max={4096} step={64} value={settings.width} onChange={(v) => update('width', v)} />
+          <label className="field-label" htmlFor="krea2-genislik">
+            Genişlik
+          </label>
+          <NumberField id="krea2-genislik" min={64} max={4096} step={64} value={settings.width} onChange={(v) => update('width', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Yükseklik</label>
-          <NumberField min={64} max={4096} step={64} value={settings.height} onChange={(v) => update('height', v)} />
+          <label className="field-label" htmlFor="krea2-yukseklik">
+            Yükseklik
+          </label>
+          <NumberField id="krea2-yukseklik" min={64} max={4096} step={64} value={settings.height} onChange={(v) => update('height', v)} />
         </div>
       </div>
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">
+          <label className="field-label" htmlFor="krea2-adim-1-gecis">
             Adım · 1. geçiş
             <HelpTip>
               Bu workflow iki geçişli çalışıyor: ilki kaba yapıyı oluşturuyor, ikincisi düşük denoise ile inceliyor. Adımlar ayrı ayrı
               ayarlanabiliyor.
             </HelpTip>
           </label>
-          <NumberField min={1} max={60} step={1} value={settings.steps1} onChange={(v) => update('steps1', v)} />
+          <NumberField id="krea2-adim-1-gecis" min={1} max={60} step={1} value={settings.steps1} onChange={(v) => update('steps1', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Adım · 2. geçiş</label>
-          <NumberField min={1} max={30} step={1} value={settings.steps2} onChange={(v) => update('steps2', v)} />
+          <label className="field-label" htmlFor="krea2-adim-2-gecis">
+            Adım · 2. geçiş
+          </label>
+          <NumberField id="krea2-adim-2-gecis" min={1} max={30} step={1} value={settings.steps2} onChange={(v) => update('steps2', v)} />
         </div>
       </div>
 
       <div className="field-row">
         <div className="field">
-          <label className="field-label">
+          <label className="field-label" htmlFor="krea2-batch-size">
             Batch Size
             <HelpTip>
-              <b>Batch Size:</b> tek işte kaç görsel üretileceği. <b>Batch Count:</b> kaç ayrı işin art arda kuyruğa ekleneceği.
-              İkisi çarpılır — 4 × 3 = 3 iş, her birinde 4 görsel.
+              <b>Batch Size:</b> tek işte kaç görsel üretileceği. <b>Batch Count:</b> kaç ayrı işin art arda kuyruğa ekleneceği. İkisi
+              çarpılır — 4 × 3 = 3 iş, her birinde 4 görsel.
             </HelpTip>
           </label>
-          <NumberField min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
+          <NumberField id="krea2-batch-size" min={1} max={8} step={1} value={settings.batchSize} onChange={(v) => update('batchSize', v)} />
         </div>
         <div className="field">
-          <label className="field-label">Batch Count</label>
-          <NumberField min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
+          <label className="field-label" htmlFor="krea2-batch-count">
+            Batch Count
+          </label>
+          <NumberField
+            id="krea2-batch-count"
+            min={1}
+            max={20}
+            step={1}
+            value={settings.batchCount}
+            onChange={(v) => update('batchCount', v)}
+          />
         </div>
       </div>
 
@@ -296,8 +341,15 @@ export function Krea2GenerateTab({ importRequest }: Props) {
       <CollapsibleSection title="Gelişmiş Ayarlar">
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Sampler · 1</label>
-            <select value={settings.samplerName1} onChange={(e) => update('samplerName1', e.target.value)} disabled={objectInfo.loading}>
+            <label className="field-label" htmlFor="krea2-sampler-1">
+              Sampler · 1
+            </label>
+            <select
+              id="krea2-sampler-1"
+              value={settings.samplerName1}
+              onChange={(e) => update('samplerName1', e.target.value)}
+              disabled={objectInfo.loading}
+            >
               {!objectInfo.krea2SamplerNames.includes(settings.samplerName1) && (
                 <option value={settings.samplerName1}>{settings.samplerName1}</option>
               )}
@@ -309,9 +361,18 @@ export function Krea2GenerateTab({ importRequest }: Props) {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">Scheduler · 1</label>
-            <select value={settings.scheduler1} onChange={(e) => update('scheduler1', e.target.value)} disabled={objectInfo.loading}>
-              {!objectInfo.schedulerNames.includes(settings.scheduler1) && <option value={settings.scheduler1}>{settings.scheduler1}</option>}
+            <label className="field-label" htmlFor="krea2-scheduler-1">
+              Scheduler · 1
+            </label>
+            <select
+              id="krea2-scheduler-1"
+              value={settings.scheduler1}
+              onChange={(e) => update('scheduler1', e.target.value)}
+              disabled={objectInfo.loading}
+            >
+              {!objectInfo.schedulerNames.includes(settings.scheduler1) && (
+                <option value={settings.scheduler1}>{settings.scheduler1}</option>
+              )}
               {objectInfo.schedulerNames.map((name) => (
                 <option key={name} value={name}>
                   {name}
@@ -321,14 +382,23 @@ export function Krea2GenerateTab({ importRequest }: Props) {
           </div>
         </div>
         <div className="field">
-          <label className="field-label">Denoise · 1</label>
-          <NumberField min={0} max={1} step={0.01} value={settings.denoise1} onChange={(v) => update('denoise1', v)} />
+          <label className="field-label" htmlFor="krea2-denoise-1">
+            Denoise · 1
+          </label>
+          <NumberField id="krea2-denoise-1" min={0} max={1} step={0.01} value={settings.denoise1} onChange={(v) => update('denoise1', v)} />
         </div>
 
         <div className="field-row">
           <div className="field">
-            <label className="field-label">Sampler · 2</label>
-            <select value={settings.samplerName2} onChange={(e) => update('samplerName2', e.target.value)} disabled={objectInfo.loading}>
+            <label className="field-label" htmlFor="krea2-sampler-2">
+              Sampler · 2
+            </label>
+            <select
+              id="krea2-sampler-2"
+              value={settings.samplerName2}
+              onChange={(e) => update('samplerName2', e.target.value)}
+              disabled={objectInfo.loading}
+            >
               {!objectInfo.krea2SamplerNames.includes(settings.samplerName2) && (
                 <option value={settings.samplerName2}>{settings.samplerName2}</option>
               )}
@@ -340,9 +410,18 @@ export function Krea2GenerateTab({ importRequest }: Props) {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">Scheduler · 2</label>
-            <select value={settings.scheduler2} onChange={(e) => update('scheduler2', e.target.value)} disabled={objectInfo.loading}>
-              {!objectInfo.schedulerNames.includes(settings.scheduler2) && <option value={settings.scheduler2}>{settings.scheduler2}</option>}
+            <label className="field-label" htmlFor="krea2-scheduler-2">
+              Scheduler · 2
+            </label>
+            <select
+              id="krea2-scheduler-2"
+              value={settings.scheduler2}
+              onChange={(e) => update('scheduler2', e.target.value)}
+              disabled={objectInfo.loading}
+            >
+              {!objectInfo.schedulerNames.includes(settings.scheduler2) && (
+                <option value={settings.scheduler2}>{settings.scheduler2}</option>
+              )}
               {objectInfo.schedulerNames.map((name) => (
                 <option key={name} value={name}>
                   {name}
@@ -352,15 +431,21 @@ export function Krea2GenerateTab({ importRequest }: Props) {
           </div>
         </div>
         <div className="field">
-          <label className="field-label">Denoise · 2</label>
-          <NumberField min={0} max={1} step={0.01} value={settings.denoise2} onChange={(v) => update('denoise2', v)} />
+          <label className="field-label" htmlFor="krea2-denoise-2">
+            Denoise · 2
+          </label>
+          <NumberField id="krea2-denoise-2" min={0} max={1} step={0.01} value={settings.denoise2} onChange={(v) => update('denoise2', v)} />
         </div>
       </CollapsibleSection>
 
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
       <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
-        {isBusy ? '+ Kuyruğa Ekle' : settings.batchSize * settings.batchCount > 1 ? `Oluştur · ${settings.batchSize * settings.batchCount}` : 'Oluştur'}
+        {isBusy
+          ? '+ Kuyruğa Ekle'
+          : settings.batchSize * settings.batchCount > 1
+            ? `Oluştur · ${settings.batchSize * settings.batchCount}`
+            : 'Oluştur'}
       </button>
 
       {viewerUrl !== null && (

@@ -32,19 +32,39 @@ export interface CivitaiGeneration {
   model: string | null
   width: number | null
   height: number | null
-  resources: { name: string; type: string | null; baseModel: string | null; strength: number | null }[]
+  // versionId: the Civitai model version — tapping a resource filters the
+  // browser to posts made with it.
+  resources: { versionId: number | null; name: string; type: string | null; baseModel: string | null; strength: number | null }[]
 }
 
 export type CivitaiSort = 'Newest' | 'Most Reactions'
 export type CivitaiPeriod = 'Day' | 'Week' | 'Month' | 'Year' | 'AllTime'
 
+export type CivitaiModelSort = 'Most Downloaded' | 'Highest Rated' | 'Newest'
+
 export interface CivitaiQuery {
-  type: 'image' | 'video'
+  // 'models': browse Civitai's models themselves (the "Modeller" tab)
+  // instead of posts.
+  type: 'image' | 'video' | 'models'
+  modelSort: CivitaiModelSort
+  modelTypes: string[] // [] = all; Civitai's names (Checkpoint, LORA…)
   sort: CivitaiSort
   period: CivitaiPeriod
   baseModels: string[] // [] = all
   withMeta: boolean
+  // Only posts made with this model version (tapped in a post's resources);
+  // overrides baseModels.
+  modelVersion: { id: number; name: string } | null
   nsfwOnly: boolean // only R / X / XXX
+  // A Civitai tag — posts tagged with it (image/video), or models by its
+  // name (Modeller). Image and model tags are separate lists, so switching
+  // to/from Modeller drops it.
+  tag: CivitaiTag | null
+}
+
+export interface CivitaiTag {
+  id: number
+  name: string
 }
 
 async function asJson<T>(res: Response): Promise<T> {
@@ -55,12 +75,75 @@ async function asJson<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export function fetchCivitaiPage(q: CivitaiQuery, cursor: string | null): Promise<CivitaiPage> {
-  const params = new URLSearchParams({ sort: q.sort, period: q.period, type: q.type, withMeta: String(q.withMeta), nsfwOnly: String(q.nsfwOnly) })
+// The post feed's own fields (image / video tab, a model page's images).
+export type CivitaiPostQuery = Pick<CivitaiQuery, 'sort' | 'period' | 'baseModels' | 'withMeta' | 'nsfwOnly' | 'modelVersion'> & {
+  type: 'image' | 'video'
+  tag?: CivitaiTag | null
+}
+
+export function fetchCivitaiPage(q: CivitaiPostQuery, cursor: string | null): Promise<CivitaiPage> {
+  const params = new URLSearchParams({
+    sort: q.sort,
+    period: q.period,
+    type: q.type,
+    withMeta: String(q.withMeta),
+    nsfwOnly: String(q.nsfwOnly),
+  })
   // Civitai's base model names never contain commas.
-  if (q.baseModels.length > 0) params.set('baseModels', q.baseModels.join(','))
+  if (q.modelVersion) params.set('modelVersionId', String(q.modelVersion.id))
+  else if (q.baseModels.length > 0) params.set('baseModels', q.baseModels.join(','))
+  if (q.tag) params.set('tagId', String(q.tag.id))
   if (cursor) params.set('cursor', cursor)
   return fetch(`/api/civitai/images?${params}`).then((r) => asJson<CivitaiPage>(r))
+}
+
+export interface CivitaiModelItem {
+  id: number
+  name: string
+  type: string
+  nsfw: boolean
+  creator: string | null
+  downloads: number
+  likes: number
+  baseModel: string | null
+  versionId: number | null
+  versions: number
+  cover: string | null
+}
+
+export function fetchCivitaiModels(
+  q: CivitaiQuery,
+  search: string,
+  cursor: string | null,
+): Promise<{ items: CivitaiModelItem[]; nextCursor: string | null }> {
+  const params = new URLSearchParams({ sort: q.modelSort, period: q.period, nsfwOnly: String(q.nsfwOnly) })
+  if (q.modelTypes.length) params.set('types', q.modelTypes.join(','))
+  if (q.baseModels.length) params.set('baseModels', q.baseModels.join(','))
+  if (search.trim()) params.set('query', search.trim())
+  if (q.tag) params.set('tag', q.tag.name)
+  if (cursor) params.set('cursor', cursor)
+  return fetch(`/api/civitai/models?${params}`).then((r) => asJson<{ items: CivitaiModelItem[]; nextCursor: string | null }>(r))
+}
+
+export interface CivitaiTagItem extends CivitaiTag {
+  isCategory: boolean
+}
+
+// No query: Civitai's category list ('image' covers videos too); with one:
+// tag-name search.
+export function fetchCivitaiTags(kind: 'image' | 'model', query: string): Promise<CivitaiTagItem[]> {
+  const params = new URLSearchParams({ kind })
+  if (query.trim()) params.set('query', query.trim())
+  return fetch(`/api/civitai/tags?${params}`)
+    .then((r) => asJson<{ items: CivitaiTagItem[] }>(r))
+    .then((d) => d.items)
+}
+
+// One post's tags, most confident first.
+export function fetchCivitaiImageTags(id: number): Promise<CivitaiTag[]> {
+  return fetch(`/api/civitai/image-tags?id=${id}`)
+    .then((r) => asJson<{ items: CivitaiTag[] }>(r))
+    .then((d) => d.items)
 }
 
 export function fetchCivitaiGeneration(id: number): Promise<CivitaiGeneration> {

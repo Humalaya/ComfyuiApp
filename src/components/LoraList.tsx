@@ -175,7 +175,9 @@ export function LoraList({ loras, loraNames, tab, onChange, onSendToPrompt }: Pr
                     {triggerWords.length > 0 && (
                       <div className="lora-trigger-list">
                         <span className="lora-trigger-words">
-                          {triggerWords.length > 1 ? `Tetik kelimeleri — ${triggerWords.length} varyant, dokunduğun prompta eklenir` : 'Tetik kelimesi — dokununca prompta eklenir'}
+                          {triggerWords.length > 1
+                            ? `Tetik kelimeleri — ${triggerWords.length} varyant, dokunduğun prompta eklenir`
+                            : 'Tetik kelimesi — dokununca prompta eklenir'}
                         </span>
                         {triggerWords.map((words, i) => (
                           <button key={i} type="button" className="lora-trigger-item" onClick={() => onSendToPrompt(words)}>
@@ -188,7 +190,12 @@ export function LoraList({ loras, loraNames, tab, onChange, onSendToPrompt }: Pr
                     {civ?.found && triggerWords.length === 0 && <div className="lora-trigger-words">Bu LoRA'nın tetik kelimesi yok.</div>}
 
                     <div className="lora-row-actions">
-                      <button type="button" className="lora-civitai-button" onClick={() => loadCivitai(name, true)} disabled={info === 'loading'}>
+                      <button
+                        type="button"
+                        className="lora-civitai-button"
+                        onClick={() => loadCivitai(name, true)}
+                        disabled={info === 'loading'}
+                      >
                         🔄 Civitai'yi yenile
                       </button>
                       <button type="button" className="lora-remove-button" onClick={() => remove(index)}>

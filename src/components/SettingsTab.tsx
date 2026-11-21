@@ -169,8 +169,8 @@ export function SettingsTab({ active }: Props) {
           </button>
         </div>
         <span className="field-hint">
-          "Durdur" yalnızca bu panelden başlatılan kopyayı kapatır. Panel zaten start-all.sh ile açıldıysa tekrar
-          başlatmak port çakışması yapar — o durumda önce mevcut stack'i durdur.
+          "Durdur" yalnızca bu panelden başlatılan kopyayı kapatır. Panel zaten start-all.sh ile açıldıysa tekrar başlatmak port çakışması
+          yapar — o durumda önce mevcut stack'i durdur.
         </span>
       </section>
 
@@ -178,9 +178,9 @@ export function SettingsTab({ active }: Props) {
         <div className="settings-section-title">
           ⏻ Bilgisayar
           <HelpTip>
-            <b>Uyut:</b> bilgisayar uykuya geçer; ComfyUI ve yüklü modeller olduğu gibi kalır, birkaç saniyede geri gelir. Uyandırmak
-            için uygulamayı aç — bilgisayara ulaşamayınca çıkan ekrandaki "Bilgisayarı uyandır" düğmesi evdeki uyandırıcı telefona
-            haber verir (Tailscale açıkken her yerden çalışır). ComfyUI'de iş varken uyutmaz.
+            <b>Uyut:</b> bilgisayar uykuya geçer; ComfyUI ve yüklü modeller olduğu gibi kalır, birkaç saniyede geri gelir. Uyandırmak için
+            uygulamayı aç — bilgisayara ulaşamayınca çıkan ekrandaki "Bilgisayarı uyandır" düğmesi evdeki uyandırıcı telefona haber verir
+            (Tailscale açıkken her yerden çalışır). ComfyUI'de iş varken uyutmaz.
             <br />
             <br />
             <b>Kapat:</b> her şeyi kapatır — ComfyUI, bu panel ve llama-swap dahil. Sonraki açılış bir kereliğine Linux olur (telefondan
