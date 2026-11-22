@@ -495,7 +495,7 @@ export default function App() {
             className={imageModel === 'anime2real' ? 'seg-btn seg-btn-active' : 'seg-btn'}
             onClick={() => setImageModel('anime2real')}
           >
-            Anime2Real
+            Edit (Flux)
           </button>
         </div>
         {/* Both stay mounted for the same reason as the outer tabs — switching
@@ -601,6 +601,8 @@ export default function App() {
               kaldırır. Metinler MiniMax H3'ün resmi prompt rehberinden.
             </HelpTip>
             <PromptGenerator
+              library={{ kind: 'video', prompt: settings.prompt, onUse: (p) => update('prompt', p.prompt) }}
+
               target="video"
               // The task type follows the wired frames; the official keyframe
               // line (with the final shot / duration) is added to every

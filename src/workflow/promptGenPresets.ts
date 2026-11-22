@@ -33,12 +33,13 @@
 //   videoPromptModes.ts applyVideoAlignment). Plus this user's own MiniMax
 //   rule: with a reference frame, no shot-size words (they re-crop it).
 
-export type PromptGenTarget = 'sdxl' | 'krea2' | 'anime2real' | 'video'
+export type PromptGenTarget = 'sdxl' | 'krea2' | 'krea2edit' | 'anime2real' | 'video'
 
 export const PROMPT_GEN_LABEL: Record<PromptGenTarget, string> = {
   sdxl: 'SDXL — Danbooru etiketleri',
   krea2: 'Krea2 — doğal dil',
-  anime2real: 'Anime2Real — düzenleme talimatı',
+  krea2edit: 'Edit — düzenleme talimatı',
+  anime2real: 'Edit — anime → gerçekçi',
   video: 'MiniMax H3 — video',
 }
 
@@ -123,6 +124,15 @@ Follow these rules strictly:
 
 Output only the prompt paragraph.`,
 
+  krea2edit: `You write the text instruction for an instruction-following image-editing model. It receives the user's input image together with your instruction and changes only what the instruction asks; you cannot see the image, the editing model can.
+
+Write one short English instruction (1 to 3 sentences):
+- Start with the change itself as a direct command, specific and concrete: "Make the man smile naturally, showing his teeth slightly." / "Change her hair color to platinum blonde." / "Replace the background with a snowy mountain landscape."
+- Then say what must stay the same when it matters for the change: "Keep his face, identity, hair, clothes, pose and the background exactly the same."
+- Refer to people and objects as they are in the image ("the man", "the woman on the left", "the red car") — don't invent appearance details the user didn't give; the image already defines them, and a wrong guess fights it.
+- One edit at a time works best; if the user asks for several, list them plainly in one sentence.
+- Big pose or camera changes are the hardest; describe the new pose concretely if asked.
+- Output only the instruction, nothing else.`,
   anime2real: `You write the text instruction for an image-editing model with an anime-to-real LoRA. It receives an input anime / illustration image and turns it into a realistic photograph. You cannot see the image; the editing model can.
 
 Output format — exactly this, one short paragraph:

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { cancelPromptGen, getPromptGen, startPromptGen, type PromptGenJob } from '../api/promptGenClient'
 import { useBackHandler } from '../native/backButton'
+import { PromptLibraryPanel, type PromptLibraryProps } from './PromptLibrary'
 import { DEFAULT_PROMPT_GEN_SYSTEM, PROMPT_GEN_LABEL, type PromptGenTarget } from '../workflow/promptGenPresets'
 
 interface Props {
@@ -11,6 +12,9 @@ interface Props {
   // Applied to every suggestion before it's shown (video: the official
   // keyframe alignment line, see videoPromptModes.ts).
   postProcess?: (prompt: string) => string
+  // The box's prompt history / saved prompts, as the pop-up's second page
+  // ("📜 Geçmiş") — one button for both.
+  library?: PromptLibraryProps
 }
 
 const STAGE_TEXT: Record<NonNullable<PromptGenJob['stage']>, string> = {
@@ -46,10 +50,12 @@ type View = 'ask' | 'result' | 'revise'
 // "Tekrar" asks what to change and revises it. Runs on the PC as a job
 // (server/promptgen.js), so the phone locking doesn't lose it; the pop-up
 // stays mounted once opened, so closing it doesn't either.
-export function PromptGenerator({ target, context, onUse, postProcess }: Props) {
+export function PromptGenerator({ target, context, onUse, postProcess, library }: Props) {
   const [open, setOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
+  const [page, setPage] = useState<'generate' | 'library'>('generate')
   useBackHandler(open, () => setOpen(false))
+  const close = () => setOpen(false)
 
   return (
     <>
@@ -60,24 +66,67 @@ export function PromptGenerator({ target, context, onUse, postProcess }: Props) 
           setMounted(true)
           setOpen(true)
         }}
-        aria-label="Prompt üret"
-        title="Prompt üret (yapay zekâ)"
+        aria-label={library ? 'Prompt üret, geçmiş ve kayıtlı promptlar' : 'Prompt üret'}
+        title={library ? 'Prompt üret · geçmiş · kayıtlı' : 'Prompt üret (yapay zekâ)'}
       >
-        ✨ Üret
+        {library ? '✨ Prompt' : '✨ Üret'}
       </button>
       {mounted && (
         <div className="popup-overlay prompt-gen-overlay" hidden={!open} onClick={() => setOpen(false)}>
           <div className="prompt-gen" role="dialog" aria-label="Prompt üretici" onClick={(e) => e.stopPropagation()}>
-            <PromptGenBody
-              target={target}
-              context={context}
-              postProcess={postProcess}
-              onClose={() => setOpen(false)}
-              onUse={(text) => {
-                onUse(text)
-                setOpen(false)
-              }}
-            />
+            <div className="lora-picker-header">
+              <span className="prompt-gen-title">✨ Prompt</span>
+              <span className="prompt-gen-target">{PROMPT_GEN_LABEL[target]}</span>
+              <button type="button" className="popup-close-inline" onClick={close} aria-label="Kapat">
+                ✕
+              </button>
+            </div>
+            {library && (
+              <div className="seg" role="tablist" aria-label="Sayfa">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={page === 'generate'}
+                  className={page === 'generate' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+                  onClick={() => setPage('generate')}
+                >
+                  ✨ Üret
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={page === 'library'}
+                  className={page === 'library' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+                  onClick={() => setPage('library')}
+                >
+                  📜 Geçmiş · Kayıtlı
+                </button>
+              </div>
+            )}
+            {library && page === 'library' && (
+              <PromptLibraryPanel
+                {...library}
+                onUse={(p) => {
+                  library.onUse(p)
+                  close()
+                }}
+              />
+            )}
+            {/* Stays mounted on the other page: a running job keeps polling. */}
+            <div className="prompt-gen-page" hidden={!!library && page !== 'generate'}>
+              <PromptGenBody
+                // The Krea2 tab switches target with its edit mode — each
+                // target keeps its own system text and pending job.
+                key={target}
+                target={target}
+                context={context}
+                postProcess={postProcess}
+                onUse={(text) => {
+                  onUse(text)
+                  setOpen(false)
+                }}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -85,7 +134,7 @@ export function PromptGenerator({ target, context, onUse, postProcess }: Props) 
   )
 }
 
-function PromptGenBody({ target, context, onUse, postProcess, onClose }: Props & { onClose: () => void }) {
+function PromptGenBody({ target, context, onUse, postProcess }: Props) {
   // v2: v1 could store an outdated default as if it were the user's own
   // edit (a live code update kept the old text in state, and an effect saved
   // it). Only an actual edit is stored now, and old v1 values are ignored.
@@ -169,14 +218,6 @@ function PromptGenBody({ target, context, onUse, postProcess, onClose }: Props &
 
   return (
     <>
-      <div className="lora-picker-header">
-        <span className="prompt-gen-title">✨ Prompt üret</span>
-        <span className="prompt-gen-target">{PROMPT_GEN_LABEL[target]}</span>
-        <button type="button" className="popup-close-inline" onClick={onClose} aria-label="Kapat">
-          ✕
-        </button>
-      </div>
-
       {running ? (
         <div className="prompt-gen-running">
           <div className="spinner" aria-label="Çalışıyor" />

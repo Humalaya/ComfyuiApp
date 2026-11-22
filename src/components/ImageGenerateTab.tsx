@@ -7,8 +7,6 @@ import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
 import { CollapsibleSection } from './CollapsibleSection'
 import { TagCheatSheet } from './TagCheatSheet'
 import { HelpTip } from './HelpTip'
-import { Img2ImgSection } from './Img2ImgSection'
-import { IMG2IMG_DEFAULT_DENOISE } from '../workflow/img2img'
 import { randomSeed, SeedField } from './SeedField'
 import { modelLabel } from '../utils/modelLabel'
 import { useObjectInfo } from '../hooks/useObjectInfo'
@@ -130,12 +128,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
   // re-fire on every unrelated re-render.
   useEffect(() => {
     if (!importRequest) return
-    setSettings((s) => {
-      const next = { ...s, ...importRequest.settings }
-      // A picture sent here for img2img while denoise still says 1 (= ignore it).
-      if (importRequest.settings.img2img && next.denoise >= 1) next.denoise = IMG2IMG_DEFAULT_DENOISE
-      return next
-    })
+    setSettings((s) => ({ ...s, ...importRequest.settings }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 
@@ -251,7 +244,19 @@ export function ImageGenerateTab({ importRequest }: Props) {
       <div className="field">
         <div className="field-label" id="sdxl-prompt-label">
           Prompt
-          <PromptGenerator target="sdxl" onUse={(text) => update('prompt', text)} />
+          <PromptGenerator
+            library={{
+              kind: 'sdxl',
+              prompt: settings.prompt,
+              negative: settings.negativePrompt,
+              onUse: (p) => {
+                update('prompt', p.prompt)
+                if (p.negative !== undefined) update('negativePrompt', p.negative)
+              },
+            }}
+            target="sdxl"
+            onUse={(text) => update('prompt', text)}
+          />
         </div>
         <textarea
           aria-labelledby="sdxl-prompt-label"
@@ -323,16 +328,6 @@ export function ImageGenerateTab({ importRequest }: Props) {
           ))}
         </div>
       </div>
-
-      <Img2ImgSection
-        idPrefix="sdxl"
-        enabled={settings.img2img}
-        image={settings.inputImage}
-        denoise={settings.denoise}
-        width={settings.width}
-        height={settings.height}
-        onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
-      />
 
       <div className="field-row">
         <div className="field">
@@ -505,8 +500,8 @@ export function ImageGenerateTab({ importRequest }: Props) {
           <label className="field-label" htmlFor="sdxl-denoise">
             Denoise
             <HelpTip>
-              img2img kapalıyken 1 kalmalı (1'in altı boş tuvalde gürültüyü temizlemeden bırakır, görsel bulanık çıkar). img2img açıkken
-              görselin ne kadarının yeniden çizileceği — yukarıdaki "Değişim oranı" ile aynı ayar.
+              1 kalmalı — 1'in altı boş tuvalde gürültüyü temizlemeden bırakır, görsel bulanık çıkar. Bir görseli düzenlemek için Edit
+              (Flux) sekmesini kullan.
             </HelpTip>
           </label>
           <NumberField id="sdxl-denoise" min={0} max={1} step={0.01} value={settings.denoise} onChange={(v) => update('denoise', v)} />

@@ -14,7 +14,10 @@ import { useImageGeneration } from '../hooks/useImageGeneration'
 import {
   ANIME2REAL_OUTPUT_NODE_ID,
   buildAnime2RealWorkflow,
+  EDIT_KEEP_FACE_DENOISE,
+  editModeDefaults,
   getDefaultAnime2RealSettings,
+  switchEditMode,
   type Anime2RealSettings,
 } from '../workflow/anime2realFieldMap'
 import type { LoraSlot } from '../workflow/fieldMap'
@@ -23,12 +26,11 @@ import { appendTriggerWords } from '../utils/promptText'
 import { useRemoteQueue } from '../storage/remoteQueueStorage'
 import { PromptGenerator } from './PromptGenerator'
 
-// This kind's key in the output-server's /api/state/:kind/* store.
+// This kind's key in the output-server's /api/state/:kind/* store (kept from
+// the tab's old Anime2Real name, so queues and prompt history carry over).
 const KIND = 'anime2real'
 
 const MAX_COMPLETED_RESULTS = 20
-
-const DEFAULT_SYSTEM_PROMPT = getDefaultAnime2RealSettings().systemPrompt
 
 interface CompletedItem {
   promptId: string
@@ -42,9 +44,10 @@ interface Props {
   importRequest?: { settings: Partial<Anime2RealSettings>; id: number } | null
 }
 
-// Anime2Real — turns an input picture into a realistic photo with Krea2's
-// edit patch + the AnimeToReal LoRA (see anime2realFieldMap.ts). Same
-// server-run queue and result handling as the Krea2 tab.
+// Edit (Flux) — edits a picture with Krea2's edit pipeline: by a plain
+// instruction, or (Anime → Gerçekçi) turning an anime picture into a photo
+// with the AnimeToReal LoRA (see anime2realFieldMap.ts). Same server-run
+// queue and result handling as the Krea2 tab.
 export function Anime2RealGenerateTab({ importRequest }: Props) {
   const [settings, setSettings] = useState<Anime2RealSettings>(
     () => loadAnime2RealSettings() ?? { ...getDefaultAnime2RealSettings(), seed: randomSeed() },
@@ -114,6 +117,8 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
   }
 
   const isBusy = gen.status === 'running' || queue.length > 0
+  const anime = settings.mode === 'anime2real'
+  const defaultSystemPrompt = editModeDefaults(settings.mode).systemPrompt
   const canGenerate = !!settings.inputImage && settings.prompt.trim().length > 0
   const [submitting, setSubmitting] = useState(false)
 
@@ -168,7 +173,7 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       {gen.status === 'running' && (
         <div className="status-panel">
           <div className="status-panel-header-row">
-            <div className="status-title">Dönüştürülüyor…</div>
+            <div className="status-title">{anime ? 'Dönüştürülüyor…' : 'Düzenleniyor…'}</div>
             <ResultCarousel urls={historyUrls} kind="image" onOpen={setViewerUrl} compact />
           </div>
           <GenerationPreview previewUrl={gen.previewUrl} progress={gen.samplingProgress} />
@@ -191,16 +196,37 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
 
       {gen.status === 'done' && gen.result && (
         <div className="status-panel status-panel-done">
-          <div className="status-title">✓ Dönüştürme Tamamlandı</div>
+          <div className="status-title">✓ {anime ? 'Dönüştürme' : 'Düzenleme'} Tamamlandı</div>
           {gen.totalElapsedSeconds !== null && <div className="status-row">Toplam süre: {gen.totalElapsedSeconds} sn</div>}
           <ResultCarousel key={gen.result.promptId} urls={historyUrls} kind="image" onOpen={setViewerUrl} />
         </div>
       )}
 
+      <div className="seg" role="group" aria-label="Düzenleme türü">
+        <button
+          type="button"
+          className={!anime ? 'seg-btn seg-btn-active' : 'seg-btn'}
+          onClick={() => setSettings((s) => switchEditMode(s, 'edit'))}
+        >
+          Talimatla düzenle
+        </button>
+        <button
+          type="button"
+          className={anime ? 'seg-btn seg-btn-active' : 'seg-btn'}
+          onClick={() => setSettings((s) => switchEditMode(s, 'anime2real'))}
+        >
+          Anime → Gerçekçi
+        </button>
+      </div>
+
       <ImageUploader
         wide
         label="Girdi görseli"
-        help="Gerçekçi fotoğrafa çevrilecek görsel (anime, çizim, 3D…). Sonuç bu görselin en-boy oranında, aşağıdaki uzun kenar boyutunda çıkar."
+        help={
+          anime
+            ? 'Gerçekçi fotoğrafa çevrilecek görsel (anime, çizim, 3D…). Sonuç bu görselin en-boy oranında, aşağıdaki uzun kenar boyutunda çıkar.'
+            : 'Düzenlenecek görsel. Sonuç bu görselin en-boy oranında, aşağıdaki uzun kenar boyutunda çıkar.'
+        }
         value={settings.inputImage}
         onChange={(img) => update('inputImage', img)}
       />
@@ -209,11 +235,26 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
         <div className="field-label" id="a2r-talimat-label">
           Talimat
           <HelpTip>
-            Varsayılan "transform the image to realistic photograph" LoRA'nın kendi tetik cümlesi. Arkasına kısa bir tarif eklemek sonucu
-            iyileştirir: ırk, yaş, saç rengi, ifade, poz, çekim açısı. Daha az gerçekçi bir sonuç için "Semi-realistic photograph"
-            yazabilirsin. Yeterince gerçekçi olmazsa sonucu tekrar dönüştürmek de işe yarar.
+            {anime ? (
+              <>
+                Varsayılan "transform the image to realistic photograph" LoRA'nın kendi tetik cümlesi. Arkasına kısa bir tarif eklemek
+                sonucu iyileştirir: ırk, yaş, saç rengi, ifade, poz, çekim açısı. Daha az gerçekçi bir sonuç için "Semi-realistic
+                photograph" yazabilirsin. Yeterince gerçekçi olmazsa sonucu tekrar dönüştürmek de işe yarar.
+              </>
+            ) : (
+              <>
+                Yapılacak değişikliği İngilizce, kısa ve doğrudan yaz: <i>make this man smile</i>, <i>make her hair blonde</i>. Görsel ve
+                talimat birlikte modele verilir; söylemediğin her şey korunur. Güvenilir olanlar ifade, saç/kıyafet rengi, el-kol hareketi
+                gibi değişiklikler; bir genel düzenleme LoRA'sı olmadan nesne silme/ekleme (<i>remove the microphone</i>) çoğunlukla işe
+                yaramaz.
+              </>
+            )}
           </HelpTip>
-          <PromptGenerator target="anime2real" onUse={(text) => update('prompt', text)} />
+          <PromptGenerator
+            library={{ kind: 'anime2real', prompt: settings.prompt, onUse: (p) => update('prompt', p.prompt) }}
+            target={anime ? 'anime2real' : 'krea2edit'}
+            onUse={(text) => update('prompt', text)}
+          />
         </div>
         <textarea
           aria-labelledby="a2r-talimat-label"
@@ -221,8 +262,35 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
           rows={4}
           value={settings.prompt}
           onChange={(e) => update('prompt', e.target.value)}
-          placeholder="transform the image to realistic photograph"
+          placeholder={anime ? 'transform the image to realistic photograph' : 'Ne değişsin? ör. make this man smile'}
         />
+      </div>
+
+      <div className="field">
+        <span className="field-label">
+          Değişim
+          <HelpTip>
+            <b>Tam</b>: istenen değişiklik tamamen uygulanır — renk, kıyafet, poz. Yüz biraz değişebilir. <b>Yüzü koru</b>: model görselin
+            kendisinden başlar, kişi aynı kalır; ama sadece küçük değişiklikler (ifade, gülümseme, küçük rötuş) geçer — renk ya da poz
+            değişmez.
+          </HelpTip>
+        </span>
+        <div className="seg" role="group" aria-label="Değişim">
+          <button
+            type="button"
+            className={settings.denoise >= 1 ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => update('denoise', 1)}
+          >
+            Tam
+          </button>
+          <button
+            type="button"
+            className={settings.denoise < 1 ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => update('denoise', EDIT_KEEP_FACE_DENOISE)}
+          >
+            Yüzü koru
+          </button>
+        </div>
       </div>
 
       <div className="field">
@@ -232,11 +300,11 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
             Modele girdi görselini nasıl okuyacağını ve talimatı nasıl uygulayacağını anlatan sabit yönerge (system_prompt). Korunmasını
             istediğin ayrıntıları buraya yazabilirsin, ör. "keep the exact pose, clothing and background". Varsayılana dönmek için ↺'ye bas.
           </HelpTip>
-          {settings.systemPrompt !== DEFAULT_SYSTEM_PROMPT && (
+          {settings.systemPrompt !== defaultSystemPrompt && (
             <button
               type="button"
               className="help-tip"
-              onClick={() => update('systemPrompt', DEFAULT_SYSTEM_PROMPT)}
+              onClick={() => update('systemPrompt', defaultSystemPrompt)}
               aria-label="Varsayılana dön"
             >
               ↺
@@ -284,7 +352,7 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
           <label className="field-label" htmlFor="a2r-adet">
             Adet
             <HelpTip>
-              Aynı görseli kaç kez dönüştüreceği — her biri ayrı iş olarak kuyruğa eklenir, Sabit kapalıysa her birine yeni seed seçilir.
+              Aynı görselden kaç sonuç üretileceği — her biri ayrı iş olarak kuyruğa eklenir, Sabit kapalıysa her birine yeni seed seçilir.
             </HelpTip>
           </label>
           <NumberField id="a2r-adet" min={1} max={20} step={1} value={settings.batchCount} onChange={(v) => update('batchCount', v)} />
@@ -366,7 +434,7 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
 
       <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
-        {isBusy ? '+ Kuyruğa Ekle' : settings.batchCount > 1 ? `Dönüştür · ${settings.batchCount}` : 'Dönüştür'}
+        {isBusy ? '+ Kuyruğa Ekle' : `${anime ? 'Dönüştür' : 'Düzenle'}${settings.batchCount > 1 ? ` · ${settings.batchCount}` : ''}`}
       </button>
 
       {viewerUrl !== null && (

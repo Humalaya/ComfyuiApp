@@ -107,7 +107,7 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
   }, [items])
   const [metadata, setMetadata] = useState<MetadataState | null>(null)
   const [metadataLoadingName, setMetadataLoadingName] = useState<string | null>(null)
-  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | 'anime2real' | 'sdxl' | 'krea2' | null>(null)
+  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | 'anime2real' | null>(null)
   // The subfolder path you just came *up* from, so it can be highlighted in
   // its parent's folder list — a plain "Geri" with no other cue made it easy
   // to lose track of which folder you were just in, especially in a source
@@ -294,7 +294,7 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
 
   useBackHandler(active && currentPath !== '', goUp)
 
-  // Sends this exact PNG as Anime2Real's input picture (to be turned into a
+  // Sends this exact PNG as the Edit (Flux) tab's input picture (to be edited, or turned into a
   // realistic photo) — independent of whatever settings it carries.
   async function handleSendToAnime2Real() {
     if (!metadata?.imageBlob) return
@@ -302,21 +302,6 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
     try {
       const inputImage = await uploadCurrentImage()
       if (inputImage) onSendToCreate({ kind: 'anime2real', settings: { inputImage } })
-      setMetadata(null)
-    } catch (err) {
-      alert(`Görsel gönderilemedi: ${(err as Error).message}`)
-    } finally {
-      setSendingAction(null)
-    }
-  }
-
-  // This PNG as the SDXL / Krea2 tab's img2img starting picture.
-  async function handleSendToImg2Img(kind: 'sdxl' | 'krea2') {
-    if (!metadata?.imageBlob) return
-    setSendingAction(kind)
-    try {
-      const inputImage = await uploadCurrentImage()
-      if (inputImage) onSendToCreate({ kind, settings: { img2img: true, inputImage } })
       setMetadata(null)
     } catch (err) {
       alert(`Görsel gönderilemedi: ${(err as Error).message}`)
@@ -474,8 +459,6 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
         sendingImage={sendingAction === 'image'}
         onSendToAnime2Real={metadata?.imageBlob ? handleSendToAnime2Real : undefined}
         sendingAnime2Real={sendingAction === 'anime2real'}
-        onSendToImg2Img={metadata?.imageBlob ? handleSendToImg2Img : undefined}
-        sendingImg2Img={sendingAction === 'sdxl' || sendingAction === 'krea2' ? sendingAction : null}
       />
     </div>
   )

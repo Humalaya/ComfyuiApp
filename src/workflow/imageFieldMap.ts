@@ -1,5 +1,4 @@
 import imageTemplateJson from './imageTemplate.json'
-import { applyImg2Img, type InputImageRef } from './img2img'
 import type { ComfyWorkflow } from '../api/comfyClient'
 import { LORA_SLOT_COUNT, type LoraSlot } from './fieldMap'
 
@@ -34,7 +33,6 @@ export const IMAGE_NODE_IDS = {
   clipSkip: '51', // CLIPSetLastLayer — stop_at_clip_layer = -clipSkip
   decode: '33', // VAEDecode of the main sampler — the image before touch-up
   saveImage: '50',
-  vaeSwitch: '34', // the VAE everything decodes/encodes with
   comparer: '57', // Image Comparer (before/after), only meaningful with the touch-up
 } as const
 
@@ -100,11 +98,6 @@ export interface ImageGenerationSettings {
   faceDetailerSteps: number
   // A1111-style clip skip (2 → CLIPSetLastLayer -2).
   clipSkip: number
-  // img2img (see img2img.ts): start from this picture instead of an empty
-  // latent; `denoise` says how much of it changes. inputImage is remembered
-  // while img2img is off.
-  img2img: boolean
-  inputImage: InputImageRef | null
 }
 
 function readImageLoraSlots(): LoraSlot[] {
@@ -144,8 +137,6 @@ export function getDefaultImageSettings(): ImageGenerationSettings {
     faceDetailer: true,
     faceDetailerSteps: Number(t[IMAGE_NODE_IDS.faceDetailer].inputs.steps ?? 14),
     clipSkip: Math.abs(Number(t[IMAGE_NODE_IDS.clipSkip].inputs.stop_at_clip_layer ?? -2)),
-    img2img: false,
-    inputImage: null,
   }
 }
 
@@ -224,9 +215,7 @@ export function buildImageWorkflow(settings: ImageGenerationSettings): ComfyWork
   workflow[IMAGE_NODE_IDS.sampler].inputs.scheduler = settings.scheduler
   // Overwrites the link to node 35 with a literal — same reasoning as the
   // video tab's identical override in fieldMap.ts.
-  // img2img switched on but no picture picked: a plain generation, which
-  // needs the full denoise (its img2img strength would leave noise).
-  workflow[IMAGE_NODE_IDS.sampler].inputs.denoise = settings.img2img && !settings.inputImage ? 1 : settings.denoise
+  workflow[IMAGE_NODE_IDS.sampler].inputs.denoise = settings.denoise
   workflow[IMAGE_NODE_IDS.seed].inputs.seed = settings.seed
   workflow[IMAGE_NODE_IDS.checkpoint].inputs.ckpt_name = settings.checkpoint
 
@@ -234,17 +223,6 @@ export function buildImageWorkflow(settings: ImageGenerationSettings): ComfyWork
   settings.loras.forEach((slot, i) => {
     loraInputs[`lora_${i + 1}`] = { on: slot.on, lora: slot.lora, strength: slot.strength }
   })
-
-  if (settings.img2img && settings.inputImage) {
-    applyImg2Img(workflow, {
-      image: settings.inputImage,
-      vae: [IMAGE_NODE_IDS.vaeSwitch, 0],
-      width: settings.width,
-      height: settings.height,
-      batchSize: settings.batchSize,
-      target: { node: IMAGE_NODE_IDS.sampler, input: 'latent_image' },
-    })
-  }
 
   workflow[IMAGE_NODE_IDS.clipSkip].inputs.stop_at_clip_layer = -Math.max(1, Math.round(settings.clipSkip))
 

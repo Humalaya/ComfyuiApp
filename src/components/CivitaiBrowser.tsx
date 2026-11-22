@@ -353,7 +353,7 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
   const [sendOpen, setSendOpen] = useState(false)
   // "Resmi gönder": the picture itself as an input image, not its settings.
   const [imageSendOpen, setImageSendOpen] = useState(false)
-  const [imageSending, setImageSending] = useState<'video' | 'anime2real' | 'sdxl' | 'krea2' | null>(null)
+  const [imageSending, setImageSending] = useState<'video' | 'anime2real' | null>(null)
   const [promptExpanded, setPromptExpanded] = useState(false)
   // The post's tags, fetched per opened item like the generation data.
   const [tags, setTags] = useState<Record<number, CivitaiTag[] | 'loading' | 'error'>>({})
@@ -554,9 +554,7 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
               {(
                 [
                   { target: 'video', label: 'MiniMax (ilk kare)' },
-                  { target: 'anime2real', label: 'Anime2Real' },
-                  { target: 'sdxl', label: 'SDXL img2img' },
-                  { target: 'krea2', label: 'Krea2 img2img' },
+                  { target: 'anime2real', label: 'Edit (Flux)' },
                 ] as const
               ).map((t) => (
                 <button
@@ -574,9 +572,7 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
                               kind: 'video',
                               settings: { inputImage, inputImageEnabled: true },
                             }
-                          : t.target === 'anime2real'
-                            ? { kind: 'anime2real', settings: { inputImage } }
-                            : { kind: t.target, settings: { img2img: true, inputImage } },
+                          : { kind: 'anime2real', settings: { inputImage } },
                       )
                     } catch (err) {
                       alert(`Gönderilemedi: ${(err as Error).message}`)

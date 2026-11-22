@@ -22,7 +22,7 @@ import crypto from 'node:crypto'
 const PROMPT_MODEL = process.env.PROMPT_LLM_MODEL || 'qwen-prompt'
 // Already loaded instead (same GPU group): use it rather than evicting it.
 const SHARED_MODELS = (process.env.PROMPT_LLM_SHARED || 'qwen-coder').split(',').filter(Boolean)
-const TARGETS = new Set(['sdxl', 'krea2', 'anime2real', 'video'])
+const TARGETS = new Set(['sdxl', 'krea2', 'krea2edit', 'anime2real', 'video'])
 const MAX_WAIT_FOR_COMFY_MS = 15 * 60 * 1000
 
 // Strip what a chat model wraps an answer in: thinking blocks, code fences,
@@ -128,7 +128,9 @@ export function registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFe
       const text = cleanOutput(choice?.message?.content)
       if (!text)
         throw new Error(
-          choice?.finish_reason === 'length' ? 'Model cevabı bitiremeden sınıra takıldı (düşünmeye harcadı) — tekrar dene.' : 'Model boş cevap verdi.',
+          choice?.finish_reason === 'length'
+            ? 'Model cevabı bitiremeden sınıra takıldı (düşünmeye harcadı) — tekrar dene.'
+            : 'Model boş cevap verdi.',
         )
       job.result = text
 
@@ -142,7 +144,8 @@ export function registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFe
       job.error = err.message || String(err)
       // Don't leave the 13 GB model holding the GPU after a failure.
       const now = await runningModels()
-      if (now.includes(PROMPT_MODEL)) await llamaSwapFetch(`/api/models/unload/${encodeURIComponent(PROMPT_MODEL)}`, { method: 'POST' }, 30000).catch(() => {})
+      if (now.includes(PROMPT_MODEL))
+        await llamaSwapFetch(`/api/models/unload/${encodeURIComponent(PROMPT_MODEL)}`, { method: 'POST' }, 30000).catch(() => {})
     } finally {
       job.stage = null
       job.finishedAt = Date.now()
@@ -176,7 +179,16 @@ export function registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFe
           content: `Revise the prompt above: ${fb}\nKeep everything else that wasn't asked to change. Output only the full revised prompt.`,
         })
       }
-      current = { id: crypto.randomUUID(), target, status: 'running', stage: 'waiting', result: null, error: null, startedAt: Date.now(), messages }
+      current = {
+        id: crypto.randomUUID(),
+        target,
+        status: 'running',
+        stage: 'waiting',
+        result: null,
+        error: null,
+        startedAt: Date.now(),
+        messages,
+      }
       run(current)
       res.json(publicJob(current))
     } catch (err) {

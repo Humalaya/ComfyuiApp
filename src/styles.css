@@ -3442,22 +3442,8 @@ button:disabled,
   font-size: 0.9rem;
 }
 
-/* img2img block (Img2ImgSection.tsx) on the SDXL / Krea2 tabs. */
-.img2img-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
 
-.img2img-controls {
-  align-items: flex-end;
-}
 
-.img2img-size .secondary-button {
-  width: 100%;
-  padding: 11px 10px;
-  font-size: 0.85rem;
-}
 
 /* Galeri kilidi (GalleryLock.tsx): the unlock screen in place of the gallery,
    and the "Galeriyi kilitle" dialog. */
@@ -3516,3 +3502,102 @@ button:disabled,
   background: var(--bg);
   overflow-wrap: anywhere;
 }
+
+/* ✨ Prompt pop-up's two pages (PromptGenerator.tsx): ✨ Üret and
+   📜 Geçmiş · Kayıtlı (PromptLibrary.tsx). Same spacing as the pop-up. */
+.prompt-gen-page,
+.prompt-lib {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prompt-gen-page[hidden] {
+  display: none;
+}
+
+.prompt-lib-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-lib-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.prompt-lib-name {
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+
+.prompt-lib-text,
+.prompt-lib-negative {
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.prompt-lib-text {
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+}
+
+.prompt-lib-negative {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  color: var(--text-dim);
+}
+
+.prompt-lib-meta {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.prompt-lib-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.prompt-lib-actions .icon-button {
+  min-width: 40px;
+  min-height: 40px;
+  background: var(--surface);
+}
+
+.prompt-lib-use {
+  flex: 1;
+  min-height: 40px;
+  padding: 6px 12px;
+  font-size: 0.9rem;
+}
+
+.prompt-lib-save {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prompt-lib-clear {
+  align-self: center;
+}
+
+.prompt-lib-clear-confirm {
+  align-self: stretch;
+  color: var(--danger-strong);
+}
+
+
+

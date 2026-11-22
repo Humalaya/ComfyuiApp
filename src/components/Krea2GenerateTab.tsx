@@ -6,8 +6,6 @@ import { ResultCarousel } from './ResultCarousel'
 import { GenerationFullscreenViewer } from './GenerationFullscreenViewer'
 import { CollapsibleSection } from './CollapsibleSection'
 import { HelpTip } from './HelpTip'
-import { Img2ImgSection } from './Img2ImgSection'
-import { IMG2IMG_DEFAULT_DENOISE } from '../workflow/img2img'
 import { randomSeed, SeedField } from './SeedField'
 import { modelLabel } from '../utils/modelLabel'
 import { useObjectInfo } from '../hooks/useObjectInfo'
@@ -88,12 +86,7 @@ export function Krea2GenerateTab({ importRequest }: Props) {
   // identical effect) — reacts only to `id` changing.
   useEffect(() => {
     if (!importRequest) return
-    setSettings((s) => {
-      const next = { ...s, ...importRequest.settings }
-      // A picture sent here for img2img while denoise still says 1 (= ignore it).
-      if (importRequest.settings.img2img && next.denoise1 >= 1) next.denoise1 = IMG2IMG_DEFAULT_DENOISE
-      return next
-    })
+    setSettings((s) => ({ ...s, ...importRequest.settings }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 
@@ -239,7 +232,11 @@ export function Krea2GenerateTab({ importRequest }: Props) {
       <div className="field">
         <div className="field-label" id="krea2-prompt-label">
           Prompt
-          <PromptGenerator target="krea2" onUse={(text) => update('prompt', text)} />
+          <PromptGenerator
+            library={{ kind: 'krea2', prompt: settings.prompt, onUse: (p) => update('prompt', p.prompt) }}
+            target="krea2"
+            onUse={(text) => update('prompt', text)}
+          />
         </div>
         <textarea
           aria-labelledby="krea2-prompt-label"
@@ -250,18 +247,6 @@ export function Krea2GenerateTab({ importRequest }: Props) {
           placeholder="Görselde ne olmasını istediğini yaz…"
         />
       </div>
-
-      <Img2ImgSection
-        idPrefix="krea2"
-        enabled={settings.img2img}
-        image={settings.inputImage}
-        denoise={settings.denoise1}
-        width={settings.width}
-        height={settings.height}
-        onChange={({ denoise, ...patch }) =>
-          setSettings((s) => ({ ...s, ...patch, ...(denoise !== undefined ? { denoise1: denoise } : {}) }))
-        }
-      />
 
       <div className="field-row">
         <div className="field">

@@ -45,7 +45,41 @@ export interface ImageRef {
   type: string
 }
 
+// The Edit (Flux) tab's two jobs. 'edit': a plain-language instruction
+// ("make this man smile") applied to the picture — what the instruction
+// doesn't mention stays. 'anime2real': the original workflow — an anime /
+// illustration turned into a realistic photo by the AnimeToReal LoRA.
+//
+// How editing works here: the Qwen3-VL text encoder looks at the picture
+// together with the instruction, and the picture is also handed to the model
+// as a reference latent (Ostris' Krea2 edit patch). The patch only *enables*
+// references; the editing skill itself comes from an edit LoRA trained for
+// it (AnimeToReal is one). Without one (measured 2026-11-21) small changes
+// work — an expression, a smile, a raised hand at full strength — but
+// removing or adding objects ("remove the microphone") does not.
+export type EditMode = 'edit' | 'anime2real'
+
+// Easy_QwenEdit2509's standing instruction for 'edit': the original's, plus
+// an explicit "keep everything else", identity first.
+export const EDIT_SYSTEM_PROMPT =
+  "Describe the key features of the input image (people, faces, hair, clothing, pose, objects, background, lighting, colors), then explain how the user's text instruction should alter the image. Generate a new image that applies only the requested change. Everything the instruction does not mention must stay exactly as in the input image: the same person with the same face, identity, age, skin, hair and body, the same clothing, pose, framing, background, lighting and photographic style."
+
+// "Yüzü koru" strength — see Anime2RealSettings.denoise.
+export const EDIT_KEEP_FACE_DENOISE = 0.75
+
+// The template's ColorCorrect saturation (−20) suits flat anime colors only.
+const ANIME_INPUT_SATURATION = -20
+
+const isAnimeToRealLora = (name: string) => /animetoreal/i.test(name)
+
 export interface Anime2RealSettings {
+  mode: EditMode
+  // The sampler's denoise. 1 = the change is fully drawn (colors, clothes,
+  // pose) but the face can drift; ~0.75 starts from the picture itself, so
+  // the person stays the same but only small changes (expression) come
+  // through. Measured: a smile works at 0.7–1; a sweater color or a raised
+  // hand needs 1.
+  denoise: number
   // The picture to convert — required.
   inputImage: ImageRef | null
   // The edit instruction. The LoRA's own trigger phrase is the default; a
@@ -84,13 +118,42 @@ function readLoraSlots(): LoraSlot[] {
   return slots
 }
 
+// What switching modes resets: the instruction and system text (only while
+// they're still the other mode's defaults — see switchEditMode) and the
+// AnimeToReal LoRA (on only for 'anime2real').
+export function editModeDefaults(mode: EditMode): { prompt: string; systemPrompt: string } {
+  const t = template()
+  return mode === 'anime2real'
+    ? {
+        prompt: String(t[ANIME2REAL_NODE_IDS.edit].inputs.prompt ?? ''),
+        systemPrompt: String(t[ANIME2REAL_NODE_IDS.edit].inputs.system_prompt ?? ''),
+      }
+    : { prompt: '', systemPrompt: EDIT_SYSTEM_PROMPT }
+}
+
+export function switchEditMode(s: Anime2RealSettings, mode: EditMode): Anime2RealSettings {
+  if (s.mode === mode) return s
+  const from = editModeDefaults(s.mode)
+  const to = editModeDefaults(mode)
+  return {
+    ...s,
+    mode,
+    prompt: s.prompt.trim() === from.prompt.trim() ? to.prompt : s.prompt,
+    systemPrompt: s.systemPrompt === from.systemPrompt ? to.systemPrompt : s.systemPrompt,
+    loras: s.loras.map((l) => (isAnimeToRealLora(l.lora) ? { ...l, on: mode === 'anime2real' } : l)),
+  }
+}
+
 export function getDefaultAnime2RealSettings(): Anime2RealSettings {
   const t = template()
   const s = t[ANIME2REAL_NODE_IDS.sampler].inputs
+  const edit = editModeDefaults('edit')
   return {
+    mode: 'edit',
+    denoise: 1,
     inputImage: null,
-    prompt: String(t[ANIME2REAL_NODE_IDS.edit].inputs.prompt ?? ''),
-    systemPrompt: String(t[ANIME2REAL_NODE_IDS.edit].inputs.system_prompt ?? ''),
+    prompt: edit.prompt,
+    systemPrompt: edit.systemPrompt,
     unetName: String(t[ANIME2REAL_NODE_IDS.diffusionModel].inputs.unet_name ?? ''),
     seed: Number(s.seed ?? 0),
     fixedSeed: false,
@@ -100,12 +163,12 @@ export function getDefaultAnime2RealSettings(): Anime2RealSettings {
     samplerName: String(s.sampler_name ?? 'euler'),
     scheduler: String(s.scheduler ?? 'beta57'),
     batchCount: 1,
-    loras: readLoraSlots(),
+    loras: readLoraSlots().map((l) => (isAnimeToRealLora(l.lora) ? { ...l, on: false } : l)),
   }
 }
 
 export function buildAnime2RealWorkflow(settings: Anime2RealSettings): ComfyWorkflow {
-  if (!settings.inputImage) throw new Error('Önce dönüştürülecek görseli seç.')
+  if (!settings.inputImage) throw new Error('Önce düzenlenecek görseli seç.')
   const workflow = structuredClone(anime2realTemplateJson) as unknown as ComfyWorkflow
 
   const { filename, subfolder } = settings.inputImage
@@ -118,7 +181,15 @@ export function buildAnime2RealWorkflow(settings: Anime2RealSettings): ComfyWork
   workflow[ANIME2REAL_NODE_IDS.resize].inputs.width = settings.maxSide
   workflow[ANIME2REAL_NODE_IDS.resize].inputs.height = settings.maxSide
 
+  // Desaturating suits anime input only; a general edit keeps the colors.
+  workflow[ANIME2REAL_NODE_IDS.colorCorrect].inputs.saturation = settings.mode === 'anime2real' ? ANIME_INPUT_SATURATION : 0
+  const save = workflow[ANIME2REAL_OUTPUT_NODE_ID].inputs
+  save.filename_prefix = `krea/%year%-%month%-%day%/${settings.mode === 'anime2real' ? 'Anime2Real' : 'Edit'}`
+
   const sampler = workflow[ANIME2REAL_NODE_IDS.sampler].inputs
+  // Below 1 the sampler starts from the picture's own latent (the edit
+  // node's latent output is the encoded input).
+  sampler.denoise = Math.min(1, Math.max(0.3, settings.denoise))
   sampler.seed = settings.seed
   sampler.steps = settings.steps
   sampler.cfg = settings.cfg
@@ -140,7 +211,10 @@ export function extractAnime2RealSettings(workflow: ComfyWorkflow): Partial<Anim
   const nodes = Object.values(workflow)
   const edit = nodes.find((n) => n?.class_type === 'Easy_QwenEdit2509')
   if (!edit) return null
-  const settings: Partial<Anime2RealSettings> = {}
+  // The file prefix tells the two modes apart (older "Krea2Edit" files were
+  // the Krea2 tab's edit mode, now this one's 'edit').
+  const prefix = String(nodes.find((n) => n?.class_type === 'SaveImage')?.inputs.filename_prefix ?? '')
+  const settings: Partial<Anime2RealSettings> = { mode: prefix.includes('Anime2Real') ? 'anime2real' : 'edit' }
   if (typeof edit.inputs.prompt === 'string') settings.prompt = edit.inputs.prompt
   if (typeof edit.inputs.system_prompt === 'string') settings.systemPrompt = edit.inputs.system_prompt
   const sampler = nodes.find((n) => n?.class_type === 'KSampler')?.inputs
@@ -149,6 +223,7 @@ export function extractAnime2RealSettings(workflow: ComfyWorkflow): Partial<Anim
       settings.seed = sampler.seed
       settings.fixedSeed = true
     }
+    if (typeof sampler.denoise === 'number') settings.denoise = sampler.denoise
     if (typeof sampler.steps === 'number') settings.steps = sampler.steps
     if (typeof sampler.cfg === 'number') settings.cfg = sampler.cfg
     if (typeof sampler.sampler_name === 'string') settings.samplerName = sampler.sampler_name

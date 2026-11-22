@@ -23,7 +23,11 @@ function normalizeImage(v: unknown): ImageRef | null {
   if (!v || typeof v !== 'object') return null
   const r = v as Partial<ImageRef>
   if (typeof r.filename !== 'string' || !r.filename) return null
-  return { filename: r.filename, subfolder: typeof r.subfolder === 'string' ? r.subfolder : '', type: typeof r.type === 'string' ? r.type : 'input' }
+  return {
+    filename: r.filename,
+    subfolder: typeof r.subfolder === 'string' ? r.subfolder : '',
+    type: typeof r.type === 'string' ? r.type : 'input',
+  }
 }
 
 function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
@@ -40,10 +44,17 @@ function normalizeLoras(v: unknown, fallback: LoraSlot[]): LoraSlot[] {
   })
 }
 
-export function normalizeAnime2RealSettings(raw: unknown, defaults: Anime2RealSettings = getDefaultAnime2RealSettings()): Anime2RealSettings {
+export function normalizeAnime2RealSettings(
+  raw: unknown,
+  defaults: Anime2RealSettings = getDefaultAnime2RealSettings(),
+): Anime2RealSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const r = raw as Partial<Anime2RealSettings>
+  // Saved before the Edit (Flux) rename: no mode yet, it was Anime2Real.
+  const mode = r.mode === 'edit' || r.mode === 'anime2real' ? r.mode : 'anime2real'
   return {
+    mode,
+    denoise: Math.min(1, Math.max(0.3, num(r.denoise, defaults.denoise))),
     inputImage: normalizeImage(r.inputImage),
     prompt: str(r.prompt, defaults.prompt),
     systemPrompt: str(r.systemPrompt, defaults.systemPrompt),

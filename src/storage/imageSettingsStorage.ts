@@ -4,7 +4,6 @@
 // overlap in prompt/seed/loras and diverge everywhere else (width/height/cfg
 // vs aspect ratio/framerate/duration).
 import { LORA_SLOT_COUNT, type LoraSlot } from '../workflow/fieldMap'
-import { normalizeInputImage } from '../workflow/img2img'
 import { getDefaultImageSettings, QUALITY_PRESETS, type ImageGenerationSettings, type QualityPreset } from '../workflow/imageFieldMap'
 
 const STORAGE_KEY = 'mobile-control:image-settings'
@@ -51,7 +50,14 @@ export function normalizeImageSettings(
     cfg: typeof r.cfg === 'number' && Number.isFinite(r.cfg) ? r.cfg : defaults.cfg,
     samplerName: typeof r.samplerName === 'string' ? r.samplerName : defaults.samplerName,
     scheduler: typeof r.scheduler === 'string' ? r.scheduler : defaults.scheduler,
-    denoise: typeof r.denoise === 'number' && Number.isFinite(r.denoise) ? r.denoise : defaults.denoise,
+    // Saved while the removed img2img was on, denoise was below 1 for it —
+    // without a picture that only leaves noise, so it goes back to 1.
+    denoise:
+      (r as { img2img?: unknown }).img2img === true
+        ? 1
+        : typeof r.denoise === 'number' && Number.isFinite(r.denoise)
+          ? r.denoise
+          : defaults.denoise,
     faceDetailer: typeof r.faceDetailer === 'boolean' ? r.faceDetailer : defaults.faceDetailer,
     clipSkip: typeof r.clipSkip === 'number' && Number.isFinite(r.clipSkip) ? r.clipSkip : defaults.clipSkip,
     faceDetailerSteps:
@@ -60,8 +66,6 @@ export function normalizeImageSettings(
     batchCount: typeof r.batchCount === 'number' && Number.isFinite(r.batchCount) ? r.batchCount : defaults.batchCount,
     checkpoint: typeof r.checkpoint === 'string' ? r.checkpoint : defaults.checkpoint,
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, LORA_SLOT_COUNT),
-    img2img: typeof r.img2img === 'boolean' ? r.img2img : defaults.img2img,
-    inputImage: normalizeInputImage(r.inputImage),
   }
 }
 
