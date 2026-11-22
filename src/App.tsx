@@ -522,6 +522,11 @@ export default function App() {
       </div>
 
       <main className="form" style={{ display: tab === 'uret' && uretView === 'video' ? 'flex' : 'none' }}>
+        {/* At the top: reachable without scrolling past the whole form. */}
+        <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
+          {isBusy ? '+ Kuyruğa Ekle' : settings.batchCount > 1 ? `Oluştur · ${settings.batchCount}` : 'Oluştur'}
+        </button>
+
         {/* Output first, form fields below — so the current job's progress
             or result is visible the moment this tab opens, without scrolling
             past the whole form to find out whether anything even finished. */}
@@ -607,7 +612,16 @@ export default function App() {
               // The task type follows the wired frames; the official keyframe
               // line (with the final shot / duration) is added to every
               // suggestion by the app, not written by the LLM.
-              context={`Task: ${videoTask(settings.inputImageEnabled && !!settings.inputImage, settings.lastFrameEnabled && !!settings.lastFrameImage)}; duration: ${effectiveVideoSeconds(settings.videoLengthSeconds).toFixed(2)} seconds`}
+              context={(() => {
+                const task = videoTask(
+                  settings.inputImageEnabled && !!settings.inputImage,
+                  settings.lastFrameEnabled && !!settings.lastFrameImage,
+                )
+                // The aspect ratio only matters without a reference picture
+                // (with one, the picture sets the framing).
+                const aspect = task === 'T2VA' && settings.aspectRatio ? `; aspect: ${settings.aspectRatio}` : ''
+                return `Task: ${task}; duration: ${effectiveVideoSeconds(settings.videoLengthSeconds).toFixed(2)} seconds${aspect}`
+              })()}
               postProcess={(text) =>
                 applyVideoAlignment(
                   text,
@@ -819,10 +833,6 @@ export default function App() {
         </CollapsibleSection>
 
         {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
-
-        <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
-          {isBusy ? '+ Kuyruğa Ekle' : settings.batchCount > 1 ? `Oluştur · ${settings.batchCount}` : 'Oluştur'}
-        </button>
       </main>
 
       <div style={{ display: tab === 'uret' && uretView === 'civitai' ? 'block' : 'none' }}>

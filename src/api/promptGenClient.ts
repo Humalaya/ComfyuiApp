@@ -1,5 +1,5 @@
 // Client for server/promptgen.js — the ✨ prompt generator.
-import type { PromptGenTarget } from '../workflow/promptGenPresets'
+import type { PromptGenTarget, PromptLength } from '../workflow/promptGenPresets'
 
 export interface PromptGenJob {
   id: string
@@ -26,11 +26,12 @@ export function startPromptGen(body: {
   system: string
   request: string
   context?: string
+  length?: PromptLength
   previous?: string
   feedback?: string
 }): Promise<PromptGenJob> {
-  return fetch('/api/promptgen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) =>
-    asJson<PromptGenJob>(r),
+  return fetch('/api/promptgen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(
+    (r) => asJson<PromptGenJob>(r),
   )
 }
 

@@ -127,6 +127,9 @@ export function fetchCivitaiModels(
 
 export interface CivitaiTagItem extends CivitaiTag {
   isCategory: boolean
+  // Place in Civitai's most-used tags (1 = most used); null = outside the
+  // top 3000 or unknown. Drives the picker's "Popüler" sort.
+  rank?: number | null
 }
 
 // No query: Civitai's category list ('image' covers videos too); with one:

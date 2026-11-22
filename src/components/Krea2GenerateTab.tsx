@@ -16,6 +16,7 @@ import { loadKrea2Settings, normalizeKrea2Settings, saveKrea2Settings } from '..
 import { appendTriggerWords } from '../utils/promptText'
 import { useRemoteQueue } from '../storage/remoteQueueStorage'
 import { PromptGenerator } from './PromptGenerator'
+import { canvasContext } from '../workflow/promptGenPresets'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -149,6 +150,15 @@ export function Krea2GenerateTab({ importRequest }: Props) {
 
   return (
     <div className="form">
+      {/* At the top: reachable without scrolling past the whole form. */}
+      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
+        {isBusy
+          ? '+ Kuyruğa Ekle'
+          : settings.batchSize * settings.batchCount > 1
+            ? `Oluştur · ${settings.batchSize * settings.batchCount}`
+            : 'Oluştur'}
+      </button>
+
       {/* Output first, form fields below — so the current job's progress or
           result is visible the moment this tab opens, without scrolling past
           the whole form to find out whether anything even finished. */}
@@ -211,30 +221,12 @@ export function Krea2GenerateTab({ importRequest }: Props) {
       )}
 
       <div className="field">
-        <label className="field-label" htmlFor="krea2-model">
-          Model
-        </label>
-        <select
-          id="krea2-model"
-          value={settings.unetName}
-          onChange={(e) => update('unetName', e.target.value)}
-          disabled={objectInfo.loading}
-        >
-          {!objectInfo.krea2UnetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
-          {objectInfo.krea2UnetNames.map((name) => (
-            <option key={name} value={name}>
-              {modelLabel(name)}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="field">
         <div className="field-label" id="krea2-prompt-label">
           Prompt
           <PromptGenerator
             library={{ kind: 'krea2', prompt: settings.prompt, onUse: (p) => update('prompt', p.prompt) }}
             target="krea2"
+            context={canvasContext(settings.width, settings.height)}
             onUse={(text) => update('prompt', text)}
           />
         </div>
@@ -314,6 +306,25 @@ export function Krea2GenerateTab({ importRequest }: Props) {
         onSeedChange={(v) => update('seed', v)}
         onFixedChange={(v) => update('fixedSeed', v)}
       />
+
+      <div className="field">
+        <label className="field-label" htmlFor="krea2-model">
+          Model
+        </label>
+        <select
+          id="krea2-model"
+          value={settings.unetName}
+          onChange={(e) => update('unetName', e.target.value)}
+          disabled={objectInfo.loading}
+        >
+          {!objectInfo.krea2UnetNames.includes(settings.unetName) && <option value={settings.unetName}>{settings.unetName}</option>}
+          {objectInfo.krea2UnetNames.map((name) => (
+            <option key={name} value={name}>
+              {modelLabel(name)}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <LoraList
         loras={settings.loras}
@@ -424,14 +435,6 @@ export function Krea2GenerateTab({ importRequest }: Props) {
       </CollapsibleSection>
 
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
-
-      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
-        {isBusy
-          ? '+ Kuyruğa Ekle'
-          : settings.batchSize * settings.batchCount > 1
-            ? `Oluştur · ${settings.batchSize * settings.batchCount}`
-            : 'Oluştur'}
-      </button>
 
       {viewerUrl !== null && (
         <GenerationFullscreenViewer

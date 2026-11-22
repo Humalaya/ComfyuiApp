@@ -11,12 +11,15 @@ interface Props {
   onClose: () => void
 }
 
-type TagSort = 'civitai' | 'az'
+type TagSort = 'civitai' | 'popular' | 'az'
 
 const SORT_KEY = 'civitai-tag-sort'
 
-function sortTags<T extends CivitaiTag>(tags: T[], sort: TagSort): T[] {
-  return sort === 'az' ? [...tags].sort((a, b) => a.name.localeCompare(b.name, 'en')) : tags
+function sortTags<T extends CivitaiTag & { rank?: number | null }>(tags: T[], sort: TagSort): T[] {
+  if (sort === 'az') return [...tags].sort((a, b) => a.name.localeCompare(b.name, 'en'))
+  // Unranked (rare) tags keep Civitai's order, after the ranked ones.
+  if (sort === 'popular') return [...tags].sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity))
+  return tags
 }
 
 // Pick a Civitai tag to filter the feed by: the site's categories, any tag
@@ -31,7 +34,8 @@ export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
   const [recent, setRecent] = useState(() => loadRecent(kind))
   const [sort, setSort] = useState<TagSort>(() => {
     try {
-      return localStorage.getItem(SORT_KEY) === 'az' ? 'az' : 'civitai'
+      const v = localStorage.getItem(SORT_KEY)
+      return v === 'az' || v === 'popular' ? v : 'civitai'
     } catch {
       return 'civitai'
     }
@@ -128,6 +132,13 @@ export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
               onClick={() => changeSort('civitai')}
             >
               {results ? 'En yakın' : 'Civitai'}
+            </button>
+            <button
+              type="button"
+              className={sort === 'popular' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+              onClick={() => changeSort('popular')}
+            >
+              Popüler
             </button>
             <button type="button" className={sort === 'az' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => changeSort('az')}>
               A–Z

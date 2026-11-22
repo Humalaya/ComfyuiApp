@@ -144,6 +144,11 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
 
   return (
     <div className="form">
+      {/* At the top: reachable without scrolling past the whole form. */}
+      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
+        {isBusy ? '+ Kuyruğa Ekle' : `${anime ? 'Dönüştür' : 'Düzenle'}${settings.batchCount > 1 ? ` · ${settings.batchCount}` : ''}`}
+      </button>
+
       {queueError && (
         <div className="status-warning">
           {queueError.message}
@@ -432,10 +437,6 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
       </CollapsibleSection>
 
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
-
-      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
-        {isBusy ? '+ Kuyruğa Ekle' : `${anime ? 'Dönüştür' : 'Düzenle'}${settings.batchCount > 1 ? ` · ${settings.batchCount}` : ''}`}
-      </button>
 
       {viewerUrl !== null && (
         <GenerationFullscreenViewer

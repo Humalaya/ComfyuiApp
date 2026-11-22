@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { cancelPromptGen, getPromptGen, startPromptGen, type PromptGenJob } from '../api/promptGenClient'
 import { useBackHandler } from '../native/backButton'
 import { PromptLibraryPanel, type PromptLibraryProps } from './PromptLibrary'
-import { DEFAULT_PROMPT_GEN_SYSTEM, PROMPT_GEN_LABEL, type PromptGenTarget } from '../workflow/promptGenPresets'
+import {
+  DEFAULT_PROMPT_GEN_SYSTEM,
+  LENGTH_TARGETS,
+  PROMPT_GEN_LABEL,
+  PROMPT_LENGTHS,
+  type PromptGenTarget,
+  type PromptLength,
+} from '../workflow/promptGenPresets'
 
 interface Props {
   target: PromptGenTarget
@@ -145,6 +152,13 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
   const jobKey = `promptgen:job:${target}`
   const resultKey = `promptgen:result:${target}`
   const [request, setRequest] = useState(() => load(draftKey, ''))
+  // Kısa / Orta / Uzun / Go nuts — remembered per tab.
+  const lengthKey = `promptgen:length:${target}`
+  const hasLength = LENGTH_TARGETS.has(target)
+  const [length, setLength] = useState<PromptLength>(() => {
+    const v = load(lengthKey, 'medium')
+    return PROMPT_LENGTHS.some((l) => l.id === v) ? (v as PromptLength) : 'medium'
+  })
   // null = not customized: always the current default (so an updated
   // default shows up without a reload).
   const [customSystem, setCustomSystem] = useState<string | null>(() => load(systemKey, '') || null)
@@ -204,6 +218,7 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
         system,
         request,
         context,
+        ...(hasLength ? { length } : {}),
         ...(revision ? { previous: result, feedback } : {}),
       })
       setJob(j)
@@ -244,6 +259,28 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
             onChange={(e) => setRequest(e.target.value)}
             placeholder="e.g. a red-haired girl reading a book in a cafe on a rainy night"
           />
+          {hasLength && (
+            <div className="field">
+              <span className="prompt-gen-label">Uzunluk</span>
+              <div className="seg prompt-gen-length" role="group" aria-label="Uzunluk">
+                {PROMPT_LENGTHS.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    className={length === l.id ? 'seg-btn seg-btn-active' : 'seg-btn'}
+                    aria-pressed={length === l.id}
+                    onClick={() => {
+                      setLength(l.id)
+                      save(lengthKey, l.id)
+                    }}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+              {length === 'nuts' && <span className="field-hint">Uzunluk sınırı yok — model ne zaman bitirmek isterse orada bitirir.</span>}
+            </div>
+          )}
           <button type="button" className="generate-button" disabled={!request.trim()} onClick={() => generate(false)}>
             ✨ Üret
           </button>

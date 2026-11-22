@@ -25,6 +25,7 @@ import { registerModelRoutes } from './models.js'
 import { registerPromptGenRoutes } from './promptgen.js'
 import { registerGalleryLockRoutes } from './galleryLock.js'
 import { recordPromptHistory, registerPromptLibraryRoutes } from './promptLibrary.js'
+import { registerSystemStatsRoutes } from './systemStats.js'
 import { appVersion, attachComfyWsProxy, comfyHttpProxy, serveBuiltApp } from './webapp.js'
 
 // Every browsable output folder is a named "source". Add more here (plus a
@@ -176,7 +177,7 @@ function sha256File(filePath) {
 async function lookupCivitaiByHash(hash) {
   const headers = CIVITAI_API_KEY ? { Authorization: `Bearer ${CIVITAI_API_KEY}` } : {}
   const res = await fetch(`https://civitai.com/api/v1/model-versions/by-hash/${hash}`, { headers })
-  if (res.status === 404) return { found: false, imageUrl: null, triggerWords: [], modelName: null }
+  if (res.status === 404) return { found: false, imageUrl: null, triggerWords: [], modelName: null, baseModel: null }
   if (!res.ok) throw new Error(`Civitai API ${res.status}`)
   const data = await res.json()
   // Some model versions (this MiniMax H3 lora among them) only carry *video*
@@ -193,6 +194,9 @@ async function lookupCivitaiByHash(hash) {
     imageUrl: image?.url ?? null,
     triggerWords: Array.isArray(data.trainedWords) ? data.trainedWords : [],
     modelName: data.model?.name ?? null,
+    // "Illustrious", "Pony", "SDXL 1.0", "Krea 2"… — the LoRA compatibility
+    // score compares these (see src/utils/loraCompat.ts).
+    baseModel: typeof data.baseModel === 'string' ? data.baseModel : null,
   }
 }
 
@@ -448,6 +452,7 @@ app.use(comfyHttpProxy(COMFY_PROXY_TARGET)) // before express.json: streams bodi
 app.use(express.json({ limit: '50mb' })) // queued items carry their full ComfyUI workflow
 registerGalleryLockRoutes(app) // before the /api/outputs routes: guards them while locked
 registerPromptLibraryRoutes(app, GENERATION_KINDS)
+registerSystemStatsRoutes(app)
 
 app.get('/api/outputs/sources', (_req, res) => {
   res.json(SOURCES.map(({ id, label, root }) => ({ id, label, configured: !!root })))
@@ -566,24 +571,43 @@ app.get('/api/outputs/thumbnail', async (req, res) => {
   }
 })
 
+// Hash a model file under `root` and look it up on Civitai, cached on disk
+// by `cacheKey` (re-hashed only when the file changes). Results cached before
+// `baseModel` was recorded get it from Civitai again by the stored hash.
+async function civitaiInfoForFile(root, name, cacheKey) {
+  const filePath = await resolveSafeRealPath(root, name)
+  const stat = await fs.stat(filePath)
+  const cached = civitaiCache[cacheKey]
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    if (!cached.result.found || 'baseModel' in cached.result || !cached.hash) return cached.result
+    cached.result = await lookupCivitaiByHash(cached.hash)
+    saveCivitaiCacheSoon()
+    return cached.result
+  }
+  const hash = await sha256File(filePath)
+  const result = await lookupCivitaiByHash(hash)
+  civitaiCache[cacheKey] = { mtimeMs: stat.mtimeMs, size: stat.size, hash, result }
+  saveCivitaiCacheSoon()
+  return result
+}
+
 app.get('/api/loras/civitai', async (req, res) => {
   try {
     if (!LORA_ROOT) throw new HttpError(503, 'LoRA klasörü yapılandırılmamış (.env: COMFYUI_LORA_DIR).')
-    const name = req.query.name
-    const filePath = await resolveSafeRealPath(LORA_ROOT, name)
-    const stat = await fs.stat(filePath)
+    res.json(await civitaiInfoForFile(LORA_ROOT, req.query.name, req.query.name))
+  } catch (err) {
+    sendError(res, err, 'Civitai bilgisi alınamadı.')
+  }
+})
 
-    const cached = civitaiCache[name]
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      res.json(cached.result)
-      return
-    }
+// Same for an SDXL checkpoint (ComfyUI/models/checkpoints, next to loras) —
+// its base model is what the LoRA compatibility score compares against.
+const CHECKPOINT_ROOT = LORA_ROOT ? path.join(path.dirname(LORA_ROOT), 'checkpoints') : null
 
-    const hash = await sha256File(filePath)
-    const result = await lookupCivitaiByHash(hash)
-    civitaiCache[name] = { mtimeMs: stat.mtimeMs, size: stat.size, hash, result }
-    saveCivitaiCacheSoon()
-    res.json(result)
+app.get('/api/checkpoints/civitai', async (req, res) => {
+  try {
+    if (!CHECKPOINT_ROOT) throw new HttpError(503, 'Checkpoint klasörü bilinmiyor (.env: COMFYUI_LORA_DIR).')
+    res.json(await civitaiInfoForFile(CHECKPOINT_ROOT, req.query.name, `checkpoint:${req.query.name}`))
   } catch (err) {
     sendError(res, err, 'Civitai bilgisi alınamadı.')
   }
@@ -669,7 +693,9 @@ async function civitaiFeed({ sort, period, type, baseModels, modelVersionId, tag
   if (modelVersionId) input.modelVersionId = modelVersionId
   else if (baseModels.length > 0) input.baseModels = baseModels
   if (cursor) input.cursor = cursor
-  const body = await fetchCivitaiJson(`https://civitai.red/api/trpc/image.getInfinite?input=${encodeURIComponent(JSON.stringify({ json: input }))}`)
+  const body = await fetchCivitaiJson(
+    `https://civitai.red/api/trpc/image.getInfinite?input=${encodeURIComponent(JSON.stringify({ json: input }))}`,
+  )
   let data = body?.result?.data
   data = typeof data === 'string' ? civitaiUnflatten(JSON.parse(data)) : data?.json
   if (!data || !Array.isArray(data.items)) throw new HttpError(502, 'Civitai yanıtı tanınmadı.')
@@ -707,7 +733,10 @@ app.get('/api/civitai/images', async (req, res) => {
         type: req.query.type === 'video' ? 'video' : 'image',
         // Comma-separated; Civitai's base model names never contain commas.
         baseModels: typeof req.query.baseModels === 'string' ? req.query.baseModels.split(',').filter(Boolean) : [],
-        modelVersionId: Number.isInteger(Number(req.query.modelVersionId)) && Number(req.query.modelVersionId) > 0 ? Number(req.query.modelVersionId) : null,
+        modelVersionId:
+          Number.isInteger(Number(req.query.modelVersionId)) && Number(req.query.modelVersionId) > 0
+            ? Number(req.query.modelVersionId)
+            : null,
         tagId: Number.isInteger(Number(req.query.tagId)) && Number(req.query.tagId) > 0 ? Number(req.query.tagId) : null,
         withMeta: req.query.withMeta === 'true',
         nsfwOnly: req.query.nsfwOnly === 'true',
@@ -731,6 +760,39 @@ async function civitaiTrpc(route, input) {
 const civitaiTagCategories = new Map() // kind -> { at, items }
 const TAG_CATEGORY_TTL = 6 * 60 * 60 * 1000
 
+// Popularity for the tag picker's "Popüler" sort. Civitai's tag search gives
+// no counts, but its public tag list comes most-used first (character,
+// anime, style, woman…) — the position in its first TAG_RANK_PAGES pages is
+// the rank; tags outside them have none and sort last.
+const TAG_RANK_PAGES = 15 // × 200 = the top 3000 tags
+const TAG_RANK_TTL = 24 * 60 * 60 * 1000
+let civitaiTagRank = { at: 0, map: new Map(), loading: null }
+
+async function loadCivitaiTagRank() {
+  if (Date.now() - civitaiTagRank.at < TAG_RANK_TTL) return civitaiTagRank.map
+  civitaiTagRank.loading ??= (async () => {
+    const map = new Map()
+    try {
+      for (let page = 1; page <= TAG_RANK_PAGES; page++) {
+        const body = await fetchCivitaiJson(`https://civitai.red/api/v1/tags?limit=200&page=${page}`)
+        const items = Array.isArray(body?.items) ? body.items : []
+        for (const t of items)
+          if (typeof t?.name === 'string' && !map.has(t.name.toLowerCase())) map.set(t.name.toLowerCase(), map.size + 1)
+        if (items.length < 200) break
+      }
+      civitaiTagRank = { at: Date.now(), map, loading: null }
+    } catch (err) {
+      console.warn('[output-server] civitai tag ranks unavailable:', err.message)
+      civitaiTagRank.loading = null
+    }
+    return civitaiTagRank.map
+  })()
+  return civitaiTagRank.loading
+}
+
+// Fetched once at startup (a few seconds), so the picker never waits on it.
+setTimeout(() => loadCivitaiTagRank().catch(() => {}), 5000)
+
 app.get('/api/civitai/tags', async (req, res) => {
   try {
     const kind = req.query.kind === 'model' ? 'model' : 'image'
@@ -740,16 +802,21 @@ app.get('/api/civitai/tags', async (req, res) => {
       (Array.isArray(items) ? items : [])
         .filter((t) => Number.isInteger(t?.id) && typeof t?.name === 'string')
         .map((t) => ({ id: t.id, name: t.name, isCategory: !!t.isCategory }))
+    const ranksPromise = loadCivitaiTagRank()
+    const withRank = async (items) => {
+      const ranks = await ranksPromise
+      return items.map((t) => ({ ...t, rank: ranks.get(t.name.toLowerCase()) ?? null }))
+    }
     if (query) {
       const data = await civitaiTrpc('tag.getAll', { entityType, query, limit: 40 })
-      return res.json({ items: trim(data?.items) })
+      return res.json({ items: await withRank(trim(data?.items)) })
     }
     const cached = civitaiTagCategories.get(kind)
-    if (cached && Date.now() - cached.at < TAG_CATEGORY_TTL) return res.json({ items: cached.items })
+    if (cached && Date.now() - cached.at < TAG_CATEGORY_TTL) return res.json({ items: await withRank(cached.items) })
     const data = await civitaiTrpc('tag.getAll', { entityType, categories: true, unlisted: false, limit: 100 })
     const items = trim(data?.items).map((t) => ({ ...t, isCategory: true }))
     civitaiTagCategories.set(kind, { at: Date.now(), items })
-    res.json({ items })
+    res.json({ items: await withRank(items) })
   } catch (err) {
     sendError(res, err, 'Civitai etiketleri alınamadı.')
   }
@@ -792,7 +859,8 @@ app.post('/api/civitai/to-input', async (req, res) => {
     } catch {
       throw new HttpError(400, 'Geçersiz görsel adresi.')
     }
-    if (url.protocol !== 'https:' || url.hostname !== 'image.civitai.com') throw new HttpError(400, 'Sadece Civitai görselleri gönderilebilir.')
+    if (url.protocol !== 'https:' || url.hostname !== 'image.civitai.com')
+      throw new HttpError(400, 'Sadece Civitai görselleri gönderilebilir.')
     const upstream = await fetch(url, { signal: AbortSignal.timeout(60000) })
     if (!upstream.ok) throw new HttpError(502, `Görsel indirilemedi (Civitai ${upstream.status}).`)
     const type = upstream.headers.get('content-type') || 'image/jpeg'
@@ -1107,7 +1175,7 @@ app.get('/api/system/models', async (_req, res) => {
     const [modelsRes, runningRes] = await Promise.all([llamaSwapFetch('/v1/models'), llamaSwapFetch('/running')])
     if (!modelsRes.ok) throw new HttpError(502, `llama-swap /v1/models → ${modelsRes.status}`)
     const models = (await modelsRes.json())?.data ?? []
-    const running = runningRes.ok ? (await runningRes.json())?.running ?? [] : []
+    const running = runningRes.ok ? ((await runningRes.json())?.running ?? []) : []
     const stateById = Object.fromEntries(running.map((r) => [r.model, r.state || 'ready']))
     res.json({
       url: LLAMA_SWAP_URL,
@@ -1158,15 +1226,31 @@ const COMFYUI_UNIT = 'comfyui.service'
 function systemctlUser(args) {
   return new Promise((resolve, reject) => {
     execFile('systemctl', ['--user', ...args], { timeout: 15000 }, (err, stdout, stderr) => {
-      if (err && err.code !== 3) reject(new Error((stderr || err.message).trim())) // 3 = "not active" for is-active/show
+      if (err && err.code !== 3)
+        reject(new Error((stderr || err.message).trim())) // 3 = "not active" for is-active/show
       else resolve(stdout)
     })
   })
 }
 
 async function comfyUnitStatus() {
-  const out = await systemctlUser(['show', COMFYUI_UNIT, '-p', 'ActiveState', '-p', 'MainPID', '-p', 'ExecMainStartTimestamp', '--timestamp=unix'])
-  const props = Object.fromEntries(out.trim().split('\n').map((l) => l.split(/=(.*)/s).slice(0, 2)))
+  const out = await systemctlUser([
+    'show',
+    COMFYUI_UNIT,
+    '-p',
+    'ActiveState',
+    '-p',
+    'MainPID',
+    '-p',
+    'ExecMainStartTimestamp',
+    '--timestamp=unix',
+  ])
+  const props = Object.fromEntries(
+    out
+      .trim()
+      .split('\n')
+      .map((l) => l.split(/=(.*)/s).slice(0, 2)),
+  )
   const running = props.ActiveState === 'active' || props.ActiveState === 'activating'
   const startedSec = Number((props.ExecMainStartTimestamp || '').replace('@', ''))
   return {
@@ -1247,7 +1331,9 @@ app.post('/api/system/shutdown', async (_req, res) => {
     if (GRUB_LINUX_ENTRY) {
       await new Promise((resolve, reject) => {
         execFile('sudo', ['-n', '/usr/sbin/grub-reboot', GRUB_LINUX_ENTRY], { timeout: 15000 }, (err, _stdout, stderr) =>
-          err ? reject(new HttpError(500, `Sonraki açılış Linux'a ayarlanamadı, kapatılmadı: ${(stderr || err.message).trim()}`)) : resolve(),
+          err
+            ? reject(new HttpError(500, `Sonraki açılış Linux'a ayarlanamadı, kapatılmadı: ${(stderr || err.message).trim()}`))
+            : resolve(),
         )
       })
     }

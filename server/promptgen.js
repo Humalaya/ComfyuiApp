@@ -19,10 +19,11 @@
 // makes a prompt slower, not better.
 import crypto from 'node:crypto'
 
+import { buildPromptGenMessages, maxTokensFor } from './promptGenRules.js'
+
 const PROMPT_MODEL = process.env.PROMPT_LLM_MODEL || 'qwen-prompt'
 // Already loaded instead (same GPU group): use it rather than evicting it.
 const SHARED_MODELS = (process.env.PROMPT_LLM_SHARED || 'qwen-coder').split(',').filter(Boolean)
-const TARGETS = new Set(['sdxl', 'krea2', 'krea2edit', 'anime2real', 'video'])
 const MAX_WAIT_FOR_COMFY_MS = 15 * 60 * 1000
 
 // Strip what a chat model wraps an answer in: thinking blocks, code fences,
@@ -113,7 +114,7 @@ export function registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFe
             body: JSON.stringify({
               model,
               messages: job.messages,
-              max_tokens: model !== PROMPT_MODEL ? 6000 : job.target === 'video' ? 1500 : 600,
+              max_tokens: maxTokensFor(job.target, job.length, model !== PROMPT_MODEL),
               temperature: 0.7,
             }),
           },
@@ -154,34 +155,20 @@ export function registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFe
 
   const publicJob = ({ messages: _m, canceled: _c, ...j }) => j
 
-  // { target, system, request, previous?, feedback? } — `previous` +
-  // `feedback` make it a revision of the last answer.
+  // { target, system, request, context?, length?, previous?, feedback? } —
+  // see promptGenRules.js; `previous` + `feedback` make it a revision of the
+  // last answer.
   app.post('/api/promptgen', (req, res) => {
     try {
       if (current && current.status === 'running') throw new HttpError(409, 'Zaten bir prompt üretiliyor.')
-      const { target, system, request, previous, feedback, context } = req.body ?? {}
-      if (!TARGETS.has(target)) throw new HttpError(400, 'Geçersiz sekme.')
-      const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
-      const sys = str(system, 8000)
-      const ask = str(request, 4000)
-      if (!sys || !ask) throw new HttpError(400, 'İstek boş.')
-      const ctx = str(context, 1000)
-      const messages = [
-        { role: 'system', content: sys },
-        { role: 'user', content: ctx ? `${ask}\n\n(${ctx})` : ask },
-      ]
-      const prev = str(previous, 12000)
-      const fb = str(feedback, 4000)
-      if (prev && fb) {
-        messages.push({ role: 'assistant', content: prev })
-        messages.push({
-          role: 'user',
-          content: `Revise the prompt above: ${fb}\nKeep everything else that wasn't asked to change. Output only the full revised prompt.`,
-        })
-      }
+      const built = buildPromptGenMessages(req.body ?? {})
+      if (built.error) throw new HttpError(400, built.error)
+      const { messages, length } = built
+      const { target } = req.body
       current = {
         id: crypto.randomUUID(),
         target,
+        length,
         status: 'running',
         stage: 'waiting',
         result: null,

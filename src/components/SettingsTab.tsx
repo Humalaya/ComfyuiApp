@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { HelpTip } from './HelpTip'
+import { PcMonitor } from './PcMonitor'
 import {
   fetchStartAllStatus,
   fetchSwapModels,
@@ -107,6 +108,8 @@ export function SettingsTab({ active }: Props) {
 
   return (
     <div className="form settings-tab">
+      <PcMonitor active={active} />
+
       <section className="settings-section">
         <div className="settings-section-title">🧠 Modeller (llama-swap)</div>
         {modelsError && <div className="field-error">{modelsError}</div>}

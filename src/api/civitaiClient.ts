@@ -8,9 +8,29 @@ export interface CivitaiLoraInfo {
   imageUrl: string | null
   triggerWords: string[]
   modelName: string | null
+  // Civitai's base model ("Illustrious", "Pony", "Krea 2"…) — see loraCompat.ts.
+  baseModel?: string | null
 }
 
-const UNAVAILABLE: CivitaiLoraInfo = { found: false, imageUrl: null, triggerWords: [], modelName: null }
+const UNAVAILABLE: CivitaiLoraInfo = { found: false, imageUrl: null, triggerWords: [], modelName: null, baseModel: null }
+
+// An SDXL checkpoint's Civitai base model (hashing a 7 GB file takes the PC
+// ~20 s the first time; the server caches it). Memoized per app load.
+const checkpointBase = new Map<string, Promise<string | null>>()
+export function fetchCheckpointBase(name: string): Promise<string | null> {
+  let p = checkpointBase.get(name)
+  if (!p) {
+    p = fetch(`/api/checkpoints/civitai?name=${encodeURIComponent(name)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info: CivitaiLoraInfo | null) => info?.baseModel ?? null)
+      .catch(() => {
+        checkpointBase.delete(name)
+        return null
+      })
+    checkpointBase.set(name, p)
+  }
+  return p
+}
 
 // Never throws — a lookup failure (server unreachable, COMFYUI_LORA_DIR not
 // configured, Civitai itself down) just means no preview/trigger words for

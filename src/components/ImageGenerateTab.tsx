@@ -23,6 +23,8 @@ import type { LoraSlot } from '../workflow/fieldMap'
 import { loadImageSettings, normalizeImageSettings, saveImageSettings } from '../storage/imageSettingsStorage'
 import { useRemoteQueue } from '../storage/remoteQueueStorage'
 import { PromptGenerator } from './PromptGenerator'
+import { useCheckpointFamily } from '../hooks/useCheckpointFamily'
+import { canvasContext } from '../workflow/promptGenPresets'
 
 // This kind's key in the output-server's shared /api/state/:kind/* store —
 // see remoteQueueStorage.ts for why that's PC RAM now, not phone localStorage.
@@ -144,6 +146,14 @@ export function ImageGenerateTab({ importRequest }: Props) {
     })
   }
 
+  // The ✨ generator writes rating / quality tags for the checkpoint's family
+  // and frames for the canvas.
+  const checkpointFamily = useCheckpointFamily(settings.checkpoint)
+  const promptContext = [
+    `Model family: ${checkpointFamily === 'pony' ? 'Pony' : checkpointFamily === 'illustrious' ? 'Illustrious' : 'SDXL'}`,
+    `quality tags: ${settings.qualityPreset === 'none' ? 'not added by the app' : 'added by the app'}`,
+    canvasContext(settings.width, settings.height),
+  ].join('; ')
   const isBusy = gen.status === 'running' || queue.length > 0
   const canGenerate = settings.prompt.trim().length > 0
 
@@ -180,6 +190,15 @@ export function ImageGenerateTab({ importRequest }: Props) {
 
   return (
     <div className="form">
+      {/* At the top: reachable without scrolling past the whole form. */}
+      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
+        {isBusy
+          ? '+ Kuyruğa Ekle'
+          : settings.batchSize * settings.batchCount > 1
+            ? `Oluştur · ${settings.batchSize * settings.batchCount}`
+            : 'Oluştur'}
+      </button>
+
       {/* Output first, form fields below — so the current job's progress or
           result is visible the moment this tab opens, without scrolling past
           the whole form to find out whether anything even finished. */}
@@ -255,6 +274,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
               },
             }}
             target="sdxl"
+            context={promptContext}
             onUse={(text) => update('prompt', text)}
           />
         </div>
@@ -374,6 +394,7 @@ export function ImageGenerateTab({ importRequest }: Props) {
         loras={settings.loras}
         loraNames={objectInfo.loraNames}
         tab="sdxl"
+        checkpoint={settings.checkpoint}
         onChange={updateLora}
         onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
       />
@@ -509,14 +530,6 @@ export function ImageGenerateTab({ importRequest }: Props) {
       </CollapsibleSection>
 
       {objectInfo.error && <div className="field-error">ComfyUI'den model listeleri alınamadı: {objectInfo.error}</div>}
-
-      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
-        {isBusy
-          ? '+ Kuyruğa Ekle'
-          : settings.batchSize * settings.batchCount > 1
-            ? `Oluştur · ${settings.batchSize * settings.batchCount}`
-            : 'Oluştur'}
-      </button>
 
       {viewerUrl !== null && (
         <GenerationFullscreenViewer
