@@ -45,3 +45,20 @@ export async function fetchCivitaiLoraInfo(loraName: string): Promise<CivitaiLor
     return UNAVAILABLE
   }
 }
+
+// "LoRA gönder": which of a Civitai post's LoRAs (model-version ids) are on
+// this PC — 'exact' = that version, 'model' = another version of the same
+// model. The first call can take a few seconds (the PC identifies LoRA files
+// it hasn't hashed yet); later ones come from its cache.
+export interface CivitaiLoraMatch {
+  versionId: number
+  lora: string | null
+  match: 'exact' | 'model' | null
+}
+
+export async function matchCivitaiLoras(versionIds: number[]): Promise<CivitaiLoraMatch[]> {
+  const res = await fetch(`/api/loras/match?versions=${versionIds.join(',')}`)
+  const body = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(body?.error || `İstek başarısız (${res.status})`)
+  return body.matches as CivitaiLoraMatch[]
+}

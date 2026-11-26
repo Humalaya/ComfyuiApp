@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { ImageUploader } from './components/ImageUploader'
+import { mergeLoras, type LoraAdd } from './workflow/loraMerge'
 import { NumberField } from './components/NumberField'
 import { CollapsibleSection } from './components/CollapsibleSection'
 import { ImportPngButton } from './components/ImportPngButton'
@@ -23,15 +24,7 @@ import { HelpTip } from './components/HelpTip'
 import { randomSeed, SeedField } from './components/SeedField'
 import { exitApp, useRootBackHandler } from './native/backButton'
 import { modelLabel } from './utils/modelLabel'
-import {
-  applyVideoAlignment,
-  effectiveVideoSeconds,
-  hasImg2Vid,
-  hasRef2Vid,
-  toggleImg2Vid,
-  toggleRef2Vid,
-  videoTask,
-} from './workflow/videoPromptModes'
+import { applyVideoAlignment, effectiveVideoSeconds, hasImg2Vid, toggleImg2Vid, videoTask } from './workflow/videoPromptModes'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
 import { buildWorkflow, getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
@@ -56,6 +49,8 @@ const QUEUE_KIND = 'video'
 export interface PendingImport<T> {
   settings: Partial<T>
   id: number
+  // LoRAs to switch on in the tab's list (loraMerge.ts).
+  addLoras?: LoraAdd[]
 }
 
 // Kept small on purpose — not a real history feature, just enough of a
@@ -354,18 +349,21 @@ export default function App() {
       // fixedSeed is already set to true inside pngImport.ts whenever
       // a seed was actually recognized, so this merge doesn't need to
       // special-case it.
-      setSettings((s) => ({ ...s, ...payload.settings }))
+      setSettings((s) => {
+        const next = { ...s, ...payload.settings }
+        return payload.addLoras ? { ...next, loras: mergeLoras(next.loras, payload.addLoras).loras } : next
+      })
       goToUret('video')
     } else if (payload.kind === 'sdxl') {
-      setImageImportRequest({ settings: payload.settings, id: Date.now() })
+      setImageImportRequest({ settings: payload.settings, addLoras: payload.addLoras, id: Date.now() })
       setImageModel('sdxl')
       goToUret('image')
     } else if (payload.kind === 'krea2') {
-      setKrea2ImportRequest({ settings: payload.settings, id: Date.now() })
+      setKrea2ImportRequest({ settings: payload.settings, addLoras: payload.addLoras, id: Date.now() })
       setImageModel('krea2')
       goToUret('image')
     } else {
-      setAnime2realImportRequest({ settings: payload.settings, id: Date.now() })
+      setAnime2realImportRequest({ settings: payload.settings, addLoras: payload.addLoras, id: Date.now() })
       setImageModel('anime2real')
       goToUret('image')
     }
@@ -578,18 +576,58 @@ export default function App() {
 
         <ImportPngButton onImport={(imported) => setSettings((s) => ({ ...s, ...imported }))} />
 
+        <div className="field">
+          <span className="field-label">
+            Video modu
+            <HelpTip>
+              İş akışındaki "Which Model to Use?" seçimi. <b>İlk / son kare</b> (FL2VA): görseller videonun ilk ve son karesidir; ikisi de
+              kapalıysa düz metinden üretilir. <b>Referans</b> (REF2VA): görseller videoda görünecek karakter, kıyafet, mekân ya da stil
+              için referanstır — kare değil. Prompt onlara &lt;Picture 1&gt;, &lt;Picture 2&gt; diye işaret eder; ✨ Prompt bu modda
+              referans formatında yazar.
+            </HelpTip>
+          </span>
+          <div className="seg" role="group" aria-label="Video modu">
+            <button
+              type="button"
+              className={settings.videoMode === 'frames' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+              onClick={() => update('videoMode', 'frames')}
+            >
+              İlk / son kare
+            </button>
+            <button
+              type="button"
+              className={settings.videoMode === 'reference' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+              // The first-frame alignment line means nothing to the reference
+              // node — dropped on the way in.
+              onClick={() =>
+                setSettings((s) => ({ ...s, videoMode: 'reference', prompt: hasImg2Vid(s.prompt) ? toggleImg2Vid(s.prompt) : s.prompt }))
+              }
+            >
+              Referans
+            </button>
+          </div>
+        </div>
+
         <div className="picture-frame-row">
           <ImageUploader
-            label="İlk kare"
-            help="Picture 1 — videonun başlangıç karesi. Kapalıyken video düz metinden üretilir (txt2vid). Kapatmak seçili görseli silmez."
+            label={settings.videoMode === 'reference' ? 'Referans 1' : 'İlk kare'}
+            help={
+              settings.videoMode === 'reference'
+                ? '<Picture 1> — bir referans görsel (ör. karakter). Videonun karesi değil; prompt ona <Picture 1> diye işaret eder. Kapatmak seçili görseli silmez.'
+                : 'Picture 1 — videonun başlangıç karesi. Kapalıyken video düz metinden üretilir (txt2vid). Kapatmak seçili görseli silmez.'
+            }
             enabled={settings.inputImageEnabled}
             onToggleEnabled={(enabled) => update('inputImageEnabled', enabled)}
             value={settings.inputImage}
             onChange={(img) => update('inputImage', img)}
           />
           <ImageUploader
-            label="Son kare"
-            help="Picture 2 — videonun bitiş karesi. Açıkken video ilk kareden bu kareye doğru ilerler. Kapalıyken video ilk kareden (ya da düz metinden) normal şekilde üretilir."
+            label={settings.videoMode === 'reference' ? 'Referans 2' : 'Son kare'}
+            help={
+              settings.videoMode === 'reference'
+                ? '<Picture 2> — ikinci referans (ör. mekân ya da ikinci karakter). Referans 1 kapalıyken bu <Picture 1> olur.'
+                : 'Picture 2 — videonun bitiş karesi. Açıkken video ilk kareden bu kareye doğru ilerler. Kapalıyken video ilk kareden (ya da düz metinden) normal şekilde üretilir.'
+            }
             enabled={settings.lastFrameEnabled}
             onToggleEnabled={(enabled) => update('lastFrameEnabled', enabled)}
             value={settings.lastFrameImage}
@@ -597,57 +635,95 @@ export default function App() {
           />
         </div>
 
+        {settings.videoMode === 'reference' && (
+          <div className="field">
+            <span className="field-label">
+              Referans kalitesi
+              <HelpTip>
+                <b>Hızlı</b> (match): referanslar videonun boyutuna küçültülür. <b>En iyi kimlik</b> (max): referanslar 2048 px kısa kenarda
+                kalır — yüz ve ayrıntı en iyi korunur ama üretim birkaç kat yavaşlar.
+              </HelpTip>
+            </span>
+            <div className="seg" role="group" aria-label="Referans kalitesi">
+              <button
+                type="button"
+                className={settings.refImageSize === 'match' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+                onClick={() => update('refImageSize', 'match')}
+              >
+                Hızlı
+              </button>
+              <button
+                type="button"
+                className={settings.refImageSize === 'max' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+                onClick={() => update('refImageSize', 'max')}
+              >
+                En iyi kimlik
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="field">
           <div className="field-label" id="video-prompt-label">
             Prompt
             <HelpTip>
-              <b>img2vid</b>: prompt'un başına MiniMax'in "ilk kare" cümlesini ekler — İlk kare görseliyle kullanılır. <b>ref2vid</b>:
-              [reference generation] işaretini ekler (prompt'ta summary: varsa onun başına). İkisi birbirini dışlar; tekrar dokunmak
-              kaldırır. Metinler MiniMax H3'ün resmi prompt rehberinden.
+              <b>img2vid</b> (İlk / son kare modunda): prompt'un başına MiniMax'in "ilk kare" cümlesini ekler — ✨ Prompt bunu zaten kendisi
+              ekler, elle yazdığın promptlar için. Referans modunda prompt'un summary: kısmı [reference generation] ile başlamalı.
             </HelpTip>
             <PromptGenerator
               library={{ kind: 'video', prompt: settings.prompt, onUse: (p) => update('prompt', p.prompt) }}
 
-              target="video"
-              // The task type follows the wired frames; the official keyframe
-              // line (with the final shot / duration) is added to every
-              // suggestion by the app, not written by the LLM.
+              target={settings.videoMode === 'reference' ? 'videoref' : 'video'}
+              // Frames mode: the task type follows the wired frames, and the
+              // official keyframe line (final shot / duration) is added to
+              // every suggestion by the app. Reference mode: the six-section
+              // REF2VA format, told which <Picture N> exist.
               context={(() => {
+                const seconds = `duration: ${effectiveVideoSeconds(settings.videoLengthSeconds).toFixed(2)} seconds`
+                const aspect = settings.aspectRatio ? `; aspect: ${settings.aspectRatio}` : ''
+                if (settings.videoMode === 'reference') {
+                  const n = [
+                    settings.inputImageEnabled && settings.inputImage,
+                    settings.lastFrameEnabled && settings.lastFrameImage,
+                  ].filter(Boolean).length
+                  const refs = n === 0 ? 'none' : n === 1 ? '<Picture 1>' : '<Picture 1>, <Picture 2>'
+                  return `Task: REF2VA; references: ${refs}; ${seconds}${aspect}`
+                }
                 const task = videoTask(
                   settings.inputImageEnabled && !!settings.inputImage,
                   settings.lastFrameEnabled && !!settings.lastFrameImage,
                 )
                 // The aspect ratio only matters without a reference picture
                 // (with one, the picture sets the framing).
-                const aspect = task === 'T2VA' && settings.aspectRatio ? `; aspect: ${settings.aspectRatio}` : ''
-                return `Task: ${task}; duration: ${effectiveVideoSeconds(settings.videoLengthSeconds).toFixed(2)} seconds${aspect}`
+                return `Task: ${task}; ${seconds}${task === 'T2VA' ? aspect : ''}`
               })()}
-              postProcess={(text) =>
-                applyVideoAlignment(
-                  text,
-                  videoTask(settings.inputImageEnabled && !!settings.inputImage, settings.lastFrameEnabled && !!settings.lastFrameImage),
-                  settings.videoLengthSeconds,
-                )
+              postProcess={
+                settings.videoMode === 'reference'
+                  ? undefined
+                  : (text) =>
+                      applyVideoAlignment(
+                        text,
+                        videoTask(
+                          settings.inputImageEnabled && !!settings.inputImage,
+                          settings.lastFrameEnabled && !!settings.lastFrameImage,
+                        ),
+                        settings.videoLengthSeconds,
+                      )
               }
               onUse={(text) => update('prompt', text)}
             />
           </div>
-          <div className="chip-row chip-row-flush">
-            <button
-              type="button"
-              className={hasImg2Vid(settings.prompt) ? 'chip chip-active' : 'chip'}
-              onClick={() => update('prompt', toggleImg2Vid(settings.prompt))}
-            >
-              img2vid
-            </button>
-            <button
-              type="button"
-              className={hasRef2Vid(settings.prompt) ? 'chip chip-active' : 'chip'}
-              onClick={() => update('prompt', toggleRef2Vid(settings.prompt))}
-            >
-              ref2vid
-            </button>
-          </div>
+          {settings.videoMode === 'frames' && (
+            <div className="chip-row chip-row-flush">
+              <button
+                type="button"
+                className={hasImg2Vid(settings.prompt) ? 'chip chip-active' : 'chip'}
+                onClick={() => update('prompt', toggleImg2Vid(settings.prompt))}
+              >
+                img2vid
+              </button>
+            </div>
+          )}
           <textarea
             aria-labelledby="video-prompt-label"
             className="prompt-textarea"

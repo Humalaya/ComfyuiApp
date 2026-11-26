@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { mergeLoras, type LoraAdd } from '../workflow/loraMerge'
 import { NumberField } from './NumberField'
 import { LoraList } from './LoraList'
 import { GenerationPreview } from './GenerationPreview'
@@ -54,6 +55,7 @@ interface Props {
   importRequest?: {
     settings: Partial<ImageGenerationSettings>
     id: number
+    addLoras?: LoraAdd[]
   } | null
 }
 
@@ -130,7 +132,10 @@ export function ImageGenerateTab({ importRequest }: Props) {
   // re-fire on every unrelated re-render.
   useEffect(() => {
     if (!importRequest) return
-    setSettings((s) => ({ ...s, ...importRequest.settings }))
+    setSettings((s) => {
+      const next = { ...s, ...importRequest.settings }
+      return importRequest.addLoras ? { ...next, loras: mergeLoras(next.loras, importRequest.addLoras).loras } : next
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 
@@ -394,7 +399,6 @@ export function ImageGenerateTab({ importRequest }: Props) {
         loras={settings.loras}
         loraNames={objectInfo.loraNames}
         tab="sdxl"
-        checkpoint={settings.checkpoint}
         onChange={updateLora}
         onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
       />

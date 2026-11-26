@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchCheckpointBase } from '../api/civitaiClient'
-import { groupOfCheckpointName, groupOfCivitaiBase, type BaseGroup } from '../utils/loraCompat'
+import { groupOfCheckpointName, groupOfCivitaiBase, type BaseGroup } from '../utils/baseModel'
 
 // The SDXL checkpoint's family (Illustrious / Pony / plain SDXL): Civitai's
 // base model once the PC has looked it up (hashed once, then cached), its

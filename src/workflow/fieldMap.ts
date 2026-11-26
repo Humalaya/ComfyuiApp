@@ -16,6 +16,18 @@ export const NODE_IDS = {
   // deleted from) *this* node's inputs by buildWorkflow, not written as a
   // value on it, so it needs its own entry separate from the two loaders below.
   imageToVideo: '644',
+  // REF2VA only: MiniMaxH3ReferenceToVideo, added in place of node 644 by
+  // buildWorkflow (the source workflow's own id for it — its "REF2VA" group,
+  // bypassed in the exported template).
+  referenceToVideo: '136',
+  conditioningSwitch: '648', // Any Switch → BasicGuider
+  latentSwitch: '682', // Any Switch → the sampler's latent
+  clip: '128',
+  videoVae: '119',
+  audioVae: '120',
+  width: '626',
+  height: '628',
+  length: '131',
   inputImage: '687', // "Picture 1" — LoadImageCrop feeding first_frame
   lastFrameImage: '900', // "Picture 2" — LoadImageCrop feeding last_frame
   samplerSelect: '123', // KSamplerSelect — sampler_name
@@ -28,6 +40,8 @@ export interface LoraSlot {
   lora: string
   strength: number
 }
+
+export type VideoMode = 'frames' | 'reference'
 
 export interface GenerationSettings {
   prompt: string
@@ -61,6 +75,17 @@ export interface GenerationSettings {
   // interpolation; wiring only one is a plain single-image start frame.
   lastFrameImage: { filename: string; subfolder: string; type: string } | null
   lastFrameEnabled: boolean
+  // Which MiniMax H3 path renders the video — the source workflow's "Which
+  // Model to Use?" switch. 'frames' (FL2VA): MiniMaxH3ImageToVideo, Picture 1
+  // = first frame, Picture 2 = last frame (neither = text-to-video).
+  // 'reference' (REF2VA): MiniMaxH3ReferenceToVideo, Picture 1 / 2 are
+  // reference images the prompt points at (<Picture 1>…) — a character, a
+  // place, a style — not frames of the video.
+  videoMode: VideoMode
+  // REF2VA: 'match' scales each reference down to the video's pixel area
+  // (fast); 'max' keeps a 2048px short edge — best identity, several times
+  // slower (reference tokens ride through every sampling step).
+  refImageSize: 'match' | 'max'
   loras: LoraSlot[]
   // UI-only, like fixedSeed — this workflow's MiniMaxH3ImageToVideo node has
   // no batch_size input at all (checked via ComfyUI's own /object_info), so
@@ -104,6 +129,8 @@ export function getDefaultSettings(): GenerationSettings {
     inputImageEnabled: false,
     lastFrameImage: null,
     lastFrameEnabled: false,
+    videoMode: 'frames',
+    refImageSize: 'match',
     loras: readLoraSlots(),
     batchCount: 1,
   }
@@ -150,12 +177,47 @@ export function buildWorkflow(settings: GenerationSettings): ComfyWorkflow {
     delete imageToVideoInputs.last_frame
   }
 
+  if (settings.videoMode === 'reference') wireReferenceNode(workflow, settings)
+
   const loraInputs = workflow[NODE_IDS.loraLoader].inputs
   settings.loras.forEach((slot, i) => {
     loraInputs[`lora_${i + 1}`] = { on: slot.on, lora: slot.lora, strength: slot.strength }
   })
 
   return workflow
+}
+
+// REF2VA: MiniMaxH3ReferenceToVideo replaces MiniMaxH3ImageToVideo (same
+// prompt / size / length / encoders; plus the audio VAE), and the two Any
+// Switches that picked 644's outputs now take its. The enabled pictures are
+// its reference images 0 and 1 — <Picture 1> / <Picture 2> in the prompt —
+// read from the same loaders, uncropped.
+function wireReferenceNode(workflow: ComfyWorkflow, settings: GenerationSettings) {
+  delete workflow[NODE_IDS.imageToVideo]
+  const inputs: Record<string, unknown> = {
+    clip: [NODE_IDS.clip, 0],
+    vae: [NODE_IDS.videoVae, 0],
+    audio_vae: [NODE_IDS.audioVae, 0],
+    prompt: [NODE_IDS.prompt, 0],
+    width: [NODE_IDS.width, 0],
+    height: [NODE_IDS.height, 0],
+    length: [NODE_IDS.length, 1],
+    ref_image_size: settings.refImageSize,
+  }
+  const refs = [
+    settings.inputImageEnabled && settings.inputImage ? NODE_IDS.inputImage : null,
+    settings.lastFrameEnabled && settings.lastFrameImage ? NODE_IDS.lastFrameImage : null,
+  ].filter((id): id is NonNullable<typeof id> => id !== null)
+  refs.forEach((id, i) => {
+    inputs[`ref_images.ref_image_${i}`] = [id, 0]
+  })
+  workflow[NODE_IDS.referenceToVideo] = {
+    class_type: 'MiniMaxH3ReferenceToVideo',
+    inputs,
+    _meta: { title: 'MiniMax H3 Reference to Video' },
+  }
+  workflow[NODE_IDS.conditioningSwitch].inputs = { any_02: [NODE_IDS.referenceToVideo, 0] }
+  workflow[NODE_IDS.latentSwitch].inputs = { any_01: [NODE_IDS.referenceToVideo, 1] }
 }
 
 export const VIDEO_OUTPUT_NODE_ID = '702'

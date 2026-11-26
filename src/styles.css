@@ -3688,69 +3688,60 @@ button:disabled,
   color: var(--text-dim);
 }
 
-/* LoRA list's "Uyum" score (LoraList.tsx, utils/loraCompat.ts). */
-.lora-compat {
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  --compat-color: var(--accent);
+/* Civitai viewer's "LoRA gönder" (CivitaiLoraSend.tsx). The action row wraps
+   so four buttons fit on a phone. */
+.civitai-actions {
+  flex-wrap: wrap;
 }
 
-.lora-compat-good {
-  --compat-color: #3fb27f;
+.civitai-lora-send-button {
+  flex-shrink: 0;
+  padding: 12px 14px;
 }
 
-.lora-compat-warn {
-  --compat-color: #e0a030;
+.civitai-lora-send {
+  max-width: 360px;
 }
 
-.lora-compat-bad {
-  --compat-color: var(--danger-strong);
-}
-
-.lora-compat-head {
+.civitai-lora-send-wait {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  min-height: 40px;
-  padding: 6px 12px;
-  border: none;
-  background: none;
-  color: var(--text);
   font-size: 0.85rem;
-  text-align: left;
+  color: var(--text-dim);
 }
 
-.lora-compat-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--compat-color);
-  flex-shrink: 0;
-}
-
-.lora-compat-score {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.lora-compat-label {
-  flex: 1;
-  color: var(--compat-color);
-}
-
-.lora-compat-reasons {
-  margin: 0;
-  padding: 0 12px 10px 30px;
+.civitai-lora-send-list {
   list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 0.78rem;
-  line-height: 1.4;
+  gap: 8px;
+  max-height: 40dvh;
+  overflow-y: auto;
 }
 
-.lora-compat-reason-info {
+.civitai-lora-send-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 0.84rem;
+}
+
+.civitai-lora-send-status {
+  font-size: 0.76rem;
+  color: var(--accent-text);
+  overflow-wrap: anywhere;
+}
+
+.civitai-lora-send-missing {
+  opacity: 0.55;
+}
+
+.civitai-lora-send-missing .civitai-lora-send-status {
   color: var(--text-dim);
 }

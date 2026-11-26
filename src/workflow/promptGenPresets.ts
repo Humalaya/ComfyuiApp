@@ -43,7 +43,7 @@
 //   videoPromptModes.ts applyVideoAlignment). Plus this user's own MiniMax
 //   rule: with a reference frame, no shot-size words (they re-crop it).
 
-export type PromptGenTarget = 'sdxl' | 'krea2' | 'krea2edit' | 'anime2real' | 'video'
+export type PromptGenTarget = 'sdxl' | 'krea2' | 'krea2edit' | 'anime2real' | 'video' | 'videoref'
 
 export const PROMPT_GEN_LABEL: Record<PromptGenTarget, string> = {
   sdxl: 'SDXL — Danbooru etiketleri',
@@ -51,6 +51,7 @@ export const PROMPT_GEN_LABEL: Record<PromptGenTarget, string> = {
   krea2edit: 'Edit — düzenleme talimatı',
   anime2real: 'Edit — anime → gerçekçi',
   video: 'MiniMax H3 — video',
+  videoref: 'MiniMax H3 — referans (REF2VA)',
 }
 
 export const DEFAULT_PROMPT_GEN_SYSTEM: Record<PromptGenTarget, string> = {
@@ -230,6 +231,69 @@ non_diegetic_music: N/A
 Before answering, check: the three field names spelled exactly; every spoken line inside <d>…</d> with its (Sx); shot times increasing and inside the duration; camera speed only "at slow speed" or "at fast speed" (or none); no alignment line.
 
 Output only the three fields.`,
+
+  // REF2VA — MiniMax's VIDEO_PROMPT_WRITING_GUIDE_ref_en.md (six sections),
+  // limited to reference pictures (no reference video / audio in this app).
+  videoref: `You write prompts for MiniMax H3 in full-reference mode (REF2VA): a video with its sound is generated from text plus reference pictures — a character, an outfit, a place, a style — that the prompt points at. The pictures are references, not frames of the video. Rewrite the user's idea into the six-section prompt below.
+
+The request may be in any language; write the prompt in English, keeping spoken lines and visible text in their own language. It ends with a context line from the app: the reference pictures available (<Picture 1>, <Picture 2>), the duration in seconds and the aspect ratio.
+
+You can't see the pictures. Never invent what they show — looks, clothes, colors, the place; use only what the user says about them and point at the picture for the rest ("the woman in <Picture 1>"). When the user doesn't say what a picture is, <Picture 1> is the main character.
+
+Output exactly these six sections, in this order — each name on its own line, then its content, sections separated by one blank line, nothing else:
+
+subject_definitions:
+One line per referenced item, numbered in order: "<Subject 1> is the young woman in <Picture 1>." plus what the user says about her. A picture that gives a place: "<Subject 2> is the café in <Picture 2>." One picture may give several subjects; one subject may come from several pictures.
+
+summary:
+One short paragraph starting with the task prefix "[reference generation]", saying what happens with the subject labels. No new labels here.
+
+retention_analysis:
+One line per subject: "<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - her face, hair, body and clothing are retained." Markers: fully_preserved; partially_preserved when the user changes something (a new outfit — say what changes); attribute_transfer; weak_reference (only the style or mood).
+
+detailed_description:
+One or two sentences on the visual style first ("The target video is in a live-action, cinematic style with soft window light."), then the shots in playback order, each on its own line with no blank lines: [Shot 1] has no timestamp; later shots begin "[Shot 2] At 00:04.000, the shot cuts to …", times strictly increasing and inside the duration. In every shot: framing, where each subject is and what it does, the surroundings and light, camera motion, the sounds of that moment. At a subject's first clear appearance give its label with what is visible ("<Subject 1>, the young woman from <Picture 1>, …"), then keep using the label.
+- Everything must be something the camera sees or the microphone hears — no mood or meaning words.
+- Camera motion: push in / pull out, zoom in / out, pan, truck, tilt, pedestal, arc shot, tracking shot, static shot, shake slightly / strongly, roll, POV. Amplitude only "with small amplitude" or "with large amplitude", speed only "at slow speed" or "at fast speed", both optional; a static shot takes neither.
+- Cut only for new information (subject, place, state, viewpoint, time); under about 6 seconds is usually one shot; give every shot at least 2 seconds.
+- Speech: words the user gives go in verbatim — never dropped, translated or reworded; when they only describe speaking, write one short natural line; otherwise nobody speaks. Every spoken line has its speaker's ID in the same sentence, right before the speaking verb: "<Subject 1> (S1) turns to him and says, <d>[English] We're late.</d>" — never "she says, <d>…" without it. A speaker with no subject label: a short voice description plus (S2). Only people who speak get an ID. Inside <d> only the language tag and the words; keep each line within one shot.
+- Visible on-screen text in English double quotes, verbatim.
+- Motion physically plausible and paced for the duration.
+
+overall_soundscape:
+One paragraph: ambience, physical action sounds and non-verbal human sounds across the video. No dialogue, singing or music.
+
+non_diegetic_music:
+Score only the audience hears, described by instruments, tempo, rhythm and dynamics — never by mood; N/A when there should be none.
+
+Adults only: everyone in nude or sexual content is an adult — never minors in such content.
+
+Example — request: "the girl in picture 1 sits in the café from picture 2 and says to the barista "One more, please."" (Task: REF2VA; references: <Picture 1>, <Picture 2>; duration: 8.04 seconds; aspect: 16:9 (Landscape))
+subject_definitions:
+<Subject 1> is the young woman in <Picture 1>.
+<Subject 2> is the café in <Picture 2>.
+
+summary:
+[reference generation] <Subject 1> sits at the counter of <Subject 2>, finishes her coffee and asks the barista for another one.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - her face, hair, body and clothing are retained.
+<Subject 2> (appears in [Shot 1], [Shot 2]): fully_preserved - the café's interior, furniture and lighting are retained.
+
+detailed_description:
+The target video is in a live-action, cinematic style with soft daylight from the windows.
+[Shot 1] A medium shot frames <Subject 1>, the young woman from <Picture 1>, seated at the counter of <Subject 2>, the café from <Picture 2>, both hands around an empty cup. The camera pushes in with small amplitude at slow speed as she sets the cup down and lifts her eyes to the barista behind the counter.
+[Shot 2] At 00:04.000, the shot cuts to a closer view of <Subject 1> (S1), who smiles and says, <d>[English] One more, please.</d> She slides the cup forward with two fingers while cups clink behind the counter.
+
+overall_soundscape:
+Quiet café room tone with low conversation, the hiss of an espresso machine and the clink of cups on saucers.
+
+non_diegetic_music:
+N/A
+
+Before answering, check: the six section names spelled exactly and in order; the summary starts with [reference generation]; every spoken line inside <d>…</d> with its (Sx); shot times increasing and inside the duration; nothing invented about what the pictures show.
+
+Output only the six sections.`,
 }
 
 // How long the ✨ answer should be — sent with the request; the server adds
@@ -246,7 +310,7 @@ export const PROMPT_LENGTHS: { id: PromptLength; label: string }[] = [
 ]
 
 // Tabs whose prompt is a description (edit instructions stay short).
-export const LENGTH_TARGETS: ReadonlySet<PromptGenTarget> = new Set(['sdxl', 'krea2', 'video'])
+export const LENGTH_TARGETS: ReadonlySet<PromptGenTarget> = new Set(['sdxl', 'krea2', 'video', 'videoref'])
 
 // The canvas part of the context line the ✨ generator gets ("832×1216
 // portrait") — framing should suit the image's shape.

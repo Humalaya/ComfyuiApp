@@ -55,7 +55,9 @@ export function normalizeSettings(raw: unknown, defaults: GenerationSettings = g
     aspectRatio: typeof r.aspectRatio === 'string' ? r.aspectRatio : defaults.aspectRatio,
     megapixels: typeof r.megapixels === 'number' && Number.isFinite(r.megapixels) ? r.megapixels : defaults.megapixels,
     videoLengthSeconds:
-      typeof r.videoLengthSeconds === 'number' && Number.isFinite(r.videoLengthSeconds) ? r.videoLengthSeconds : defaults.videoLengthSeconds,
+      typeof r.videoLengthSeconds === 'number' && Number.isFinite(r.videoLengthSeconds)
+        ? r.videoLengthSeconds
+        : defaults.videoLengthSeconds,
     framerate: typeof r.framerate === 'number' && Number.isFinite(r.framerate) ? r.framerate : defaults.framerate,
     unetName: typeof r.unetName === 'string' ? r.unetName : defaults.unetName,
     totalSteps: typeof r.totalSteps === 'number' && Number.isFinite(r.totalSteps) ? r.totalSteps : defaults.totalSteps,
@@ -70,6 +72,8 @@ export function normalizeSettings(raw: unknown, defaults: GenerationSettings = g
     inputImageEnabled: typeof r.inputImageEnabled === 'boolean' ? r.inputImageEnabled : inputImage !== null,
     lastFrameImage,
     lastFrameEnabled: typeof r.lastFrameEnabled === 'boolean' ? r.lastFrameEnabled : lastFrameImage !== null,
+    videoMode: r.videoMode === 'reference' ? 'reference' : 'frames',
+    refImageSize: r.refImageSize === 'max' ? 'max' : 'match',
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, LORA_SLOT_COUNT),
     batchCount: typeof r.batchCount === 'number' && Number.isFinite(r.batchCount) ? r.batchCount : defaults.batchCount,
   }

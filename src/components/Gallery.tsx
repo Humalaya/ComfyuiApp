@@ -11,6 +11,7 @@ import type { GenerationSettings } from '../workflow/fieldMap'
 import type { ImageGenerationSettings } from '../workflow/imageFieldMap'
 import type { Krea2GenerationSettings } from '../workflow/krea2FieldMap'
 import { FullscreenViewer } from './FullscreenViewer'
+import type { LoraAdd } from '../workflow/loraMerge'
 import { HelpTip } from './HelpTip'
 import { useBackHandler } from '../native/backButton'
 import { MetadataModal } from './MetadataModal'
@@ -24,11 +25,14 @@ const PAGE_SIZE = 60
 // folder. Keeping this a real discriminated union (kind travels together
 // with its matching settings shape) rather than a loose kind+settings pair
 // is what lets App.tsx route each one to the right tab/state without a cast.
-export type ImportPayload =
+// addLoras: LoRAs to switch on in the tab's list on top of what's there
+// (Civitai's "LoRA gönder" — see loraMerge.ts).
+export type ImportPayload = (
   | { kind: 'video'; settings: Partial<GenerationSettings> }
   | { kind: 'sdxl'; settings: Partial<ImageGenerationSettings> }
   | { kind: 'krea2'; settings: Partial<Krea2GenerationSettings> }
   | { kind: 'anime2real'; settings: Partial<Anime2RealSettings> }
+) & { addLoras?: LoraAdd[] }
 
 // Gallery source id -> which Create tab its metadata should populate. Kept
 // as its own map (rather than just reusing the source id as the kind

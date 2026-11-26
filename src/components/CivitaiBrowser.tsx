@@ -22,6 +22,7 @@ import { civitaiToImport, type ImportKind } from '../workflow/civitaiImport'
 import type { ImportPayload } from './Gallery'
 import { useBackHandler } from '../native/backButton'
 import { CivitaiModelPage, type ModelRef } from './CivitaiModelPage'
+import { CivitaiLoraSend, type PostLora } from './CivitaiLoraSend'
 
 interface Props {
   onSendToCreate: (payload: ImportPayload) => void
@@ -354,6 +355,8 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
   // "Resmi gönder": the picture itself as an input image, not its settings.
   const [imageSendOpen, setImageSendOpen] = useState(false)
   const [imageSending, setImageSending] = useState<'video' | 'anime2real' | null>(null)
+  // "LoRA gönder": the post's LoRAs that are on this PC, into a Create tab.
+  const [loraSendOpen, setLoraSendOpen] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
   // The post's tags, fetched per opened item like the generation data.
   const [tags, setTags] = useState<Record<number, CivitaiTag[] | 'loading' | 'error'>>({})
@@ -366,6 +369,7 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
   useEffect(() => {
     setSendOpen(false)
     setImageSendOpen(false)
+    setLoraSendOpen(false)
     setPromptExpanded(false)
     setTagsExpanded(false)
     if (onPickTag && !tags[item.id]) {
@@ -420,6 +424,16 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
           },
         ]
       : []
+
+  // Every resource with a version, not only LORA-typed ones: Civitai lists
+  // some LoRAs under a checkpoint-typed model — whether it's a LoRA here is
+  // decided by matching it against the PC's LoRA files.
+  const postLoras: PostLora[] = resources.flatMap((r) =>
+    r.versionId != null
+      ? [{ versionId: r.versionId, name: r.name, strength: r.strength, isLora: r.type === 'LORA' || r.type === 'LoCon' }]
+      : [],
+  )
+  const showLoraSend = postLoras.some((l) => l.isLora) || postLoras.length > 1
 
   const comfyLists = {
     samplerNames: objectInfo.samplerNames,
@@ -526,6 +540,11 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
             <button type="button" className="generate-button" disabled={!prompt} onClick={() => setSendOpen(true)}>
               Metadata gönder
             </button>
+            {showLoraSend && (
+              <button type="button" className="secondary-button civitai-lora-send-button" onClick={() => setLoraSendOpen(true)}>
+                LoRA gönder
+              </button>
+            )}
             {item.type === 'image' && (
               <button type="button" className="secondary-button civitai-image-send" onClick={() => setImageSendOpen(true)}>
                 Resmi gönder
@@ -542,6 +561,8 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
             </a>
           </div>
         </div>
+
+        {loraSendOpen && <CivitaiLoraSend loras={postLoras} onSend={onSend} onClose={() => setLoraSendOpen(false)} />}
 
         {imageSendOpen && (
           <div

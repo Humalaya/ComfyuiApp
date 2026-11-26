@@ -194,9 +194,13 @@ async function lookupCivitaiByHash(hash) {
     imageUrl: image?.url ?? null,
     triggerWords: Array.isArray(data.trainedWords) ? data.trainedWords : [],
     modelName: data.model?.name ?? null,
-    // "Illustrious", "Pony", "SDXL 1.0", "Krea 2"… — the LoRA compatibility
-    // score compares these (see src/utils/loraCompat.ts).
+    // "Illustrious", "Pony", "SDXL 1.0", "Krea 2"… — the SDXL checkpoint's
+    // family for the ✨ prompt generator (src/utils/baseModel.ts).
     baseModel: typeof data.baseModel === 'string' ? data.baseModel : null,
+    // Which Civitai model version / model this file is — a Civitai post's
+    // LoRAs are matched against these ("LoRA gönder", /api/loras/match).
+    versionId: Number.isInteger(data.id) ? data.id : null,
+    modelId: Number.isInteger(data.modelId) ? data.modelId : null,
   }
 }
 
@@ -579,7 +583,7 @@ async function civitaiInfoForFile(root, name, cacheKey) {
   const stat = await fs.stat(filePath)
   const cached = civitaiCache[cacheKey]
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    if (!cached.result.found || 'baseModel' in cached.result || !cached.hash) return cached.result
+    if (!cached.result.found || 'versionId' in cached.result || !cached.hash) return cached.result
     cached.result = await lookupCivitaiByHash(cached.hash)
     saveCivitaiCacheSoon()
     return cached.result
@@ -980,6 +984,72 @@ app.get('/api/loras/meta', async (_req, res) => {
     res.json(result)
   } catch (err) {
     sendError(res, err, 'LoRA bilgileri okunamadı.')
+  }
+})
+
+// "LoRA gönder" from the Civitai viewer: which of a post's LoRAs (Civitai
+// model-version ids) are on this PC. Every local LoRA's Civitai identity
+// comes from its file hash (civitaiInfoForFile, cached on disk — the first
+// call hashes / looks up the files not seen yet, later ones are instant).
+// Same version → 'exact'; another version of the same model → 'model'.
+const versionModelIds = new Map() // Civitai version id -> model id (memo)
+
+async function modelIdOfVersion(versionId) {
+  if (versionModelIds.has(versionId)) return versionModelIds.get(versionId)
+  let modelId = null
+  try {
+    const data = await fetchCivitaiJson(`https://civitai.com/api/v1/model-versions/${versionId}`)
+    modelId = Number.isInteger(data?.modelId) ? data.modelId : null
+  } catch {
+    // unknown — only an exact match can count then
+  }
+  versionModelIds.set(versionId, modelId)
+  return modelId
+}
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++
+        out[i] = await fn(items[i])
+      }
+    }),
+  )
+  return out
+}
+
+app.get('/api/loras/match', async (req, res) => {
+  try {
+    if (!LORA_ROOT) throw new HttpError(503, 'LoRA klasörü yapılandırılmamış (.env: COMFYUI_LORA_DIR).')
+    const versions = String(req.query.versions || '')
+      .split(',')
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0)
+      .slice(0, 50)
+    const names = await listLoraFiles(LORA_ROOT)
+    const local = (
+      await mapLimit(names, 4, async (name) => {
+        try {
+          const info = await civitaiInfoForFile(LORA_ROOT, name, name)
+          return info.found ? { name, versionId: info.versionId, modelId: info.modelId } : null
+        } catch {
+          return null
+        }
+      })
+    ).filter(Boolean)
+    const matches = await mapLimit(versions, 4, async (versionId) => {
+      const exact = local.find((l) => l.versionId === versionId)
+      if (exact) return { versionId, lora: exact.name, match: 'exact' }
+      const modelId = await modelIdOfVersion(versionId)
+      const sameModel = modelId != null ? local.find((l) => l.modelId === modelId) : null
+      return sameModel ? { versionId, lora: sameModel.name, match: 'model' } : { versionId, lora: null, match: null }
+    })
+    res.json({ matches })
+  } catch (err) {
+    sendError(res, err, 'LoRA eşleştirmesi yapılamadı.')
   }
 })
 

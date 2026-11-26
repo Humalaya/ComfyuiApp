@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { NumberField } from './NumberField'
 import { LoraPicker } from './LoraPicker'
 import { loraThumbnailUrl } from '../api/comfyClient'
-import { fetchCheckpointBase, fetchCivitaiLoraInfo, type CivitaiLoraInfo } from '../api/civitaiClient'
-import { loraDisplayName, loraFamilyOf, loraFolder, useLoraFamilies, type LoraTab } from '../api/loraMeta'
-import { groupOfCheckpointName, groupOfCivitaiBase, loraCompat, type BaseGroup } from '../utils/loraCompat'
+import { fetchCivitaiLoraInfo, type CivitaiLoraInfo } from '../api/civitaiClient'
+import { loraDisplayName, loraFolder, useLoraFamilies, type LoraTab } from '../api/loraMeta'
 import type { LoraSlot } from '../workflow/fieldMap'
 
 interface Props {
@@ -20,9 +19,6 @@ interface Props {
   // directly (LoraList is shared by three Create tabs with unrelated
   // settings shapes, each with its own prompt field).
   onSendToPrompt: (words: string) => void
-  // The SDXL checkpoint in use — the "Uyum" score compares the LoRAs' base
-  // model with its own. (Krea2 / video tabs have one family each.)
-  checkpoint?: string
 }
 
 const EMPTY_SLOT: LoraSlot = { on: false, lora: '', strength: 1 }
@@ -39,7 +35,7 @@ function formatStrength(n: number): string {
 // "Kaldır" empties a slot again. Weight, Civitai trigger words and removal
 // live in a row's detail panel, opened by tapping the row — the on/off
 // switch is the only thing a stray tap while scrolling can change.
-export function LoraList({ loras, loraNames, tab, onChange, onSendToPrompt, checkpoint }: Props) {
+export function LoraList({ loras, loraNames, tab, onChange, onSendToPrompt }: Props) {
   const [open, setOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [expanded, setExpanded] = useState<number | null>(null)
@@ -65,51 +61,6 @@ export function LoraList({ loras, loraNames, tab, onChange, onSendToPrompt, chec
     setCivitai((c) => ({ ...c, [name]: 'loading' }))
     fetchCivitaiLoraInfo(name).then((info) => setCivitai((c) => ({ ...c, [name]: info })))
   }
-
-  // "Uyum": the switched-on LoRAs' base models (Civitai, else the file
-  // header's family) against the model's, plus their total weight.
-  const [compatOpen, setCompatOpen] = useState(false)
-  const [checkpointCivitaiBase, setCheckpointCivitaiBase] = useState<{ name: string; base: string | null } | null>(null)
-  const activeNames = used.filter(({ slot }) => slot.on).map(({ slot }) => slot.lora)
-  const activeKey = activeNames.join('|')
-  useEffect(() => {
-    activeNames.forEach((n) => loadCivitai(n))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey])
-  useEffect(() => {
-    if (tab !== 'sdxl' || !checkpoint) return
-    let cancelled = false
-    fetchCheckpointBase(checkpoint).then((base) => !cancelled && setCheckpointCivitaiBase({ name: checkpoint, base }))
-    return () => {
-      cancelled = true
-    }
-  }, [tab, checkpoint])
-
-  const compat = (() => {
-    const active = used.filter(({ slot }) => slot.on)
-    if (active.length === 0) return null
-    const model: BaseGroup | null =
-      tab === 'sdxl'
-        ? checkpoint
-          ? (checkpointCivitaiBase?.name === checkpoint && groupOfCivitaiBase(checkpointCivitaiBase.base)) ||
-            groupOfCheckpointName(checkpoint)
-          : null
-        : tab
-    return loraCompat(
-      active.map(({ slot }) => {
-        const info = civitai[slot.lora]
-        const fromCivitai = info && info !== 'loading' ? groupOfCivitaiBase(info.baseModel) : null
-        // No Civitai answer: the header's family still tells an SDXL LoRA
-        // from a Krea2 one — but not Pony from Illustrious, so on the SDXL
-        // tab an "sdxl" family counts as unknown rather than a guess.
-        const family = loraFamilyOf(slot.lora, families)
-        const fallback: BaseGroup | null = family === 'sdxl' ? (tab === 'sdxl' ? null : 'sdxl') : family === 'other' ? null : family
-        return { name: loraDisplayName(slot.lora), strength: slot.strength, group: fromCivitai ?? fallback }
-      }),
-      model,
-    )
-  })()
-  const compatPending = activeNames.some((n) => civitai[n] === 'loading')
 
   function toggleExpanded(index: number) {
     const next = expanded === index ? null : index
@@ -147,31 +98,6 @@ export function LoraList({ loras, loraNames, tab, onChange, onSendToPrompt, chec
           ▾
         </span>
       </button>
-
-      {compat && (
-        <div className={`lora-compat lora-compat-${compat.level}`}>
-          <button type="button" className="lora-compat-head" onClick={() => setCompatOpen((o) => !o)} aria-expanded={compatOpen}>
-            <span className="lora-compat-dot" aria-hidden="true" />
-            <span className="lora-compat-score">Uyum {compat.score}/100</span>
-            <span className="lora-compat-label">
-              {compatPending ? 'hesaplanıyor…' : compat.level === 'good' ? 'Uyumlu' : compat.level === 'warn' ? 'Dikkat' : 'Sorunlu'}
-            </span>
-            <span className={`lora-list-toggle-chevron ${compatOpen ? 'lora-list-toggle-chevron-open' : ''}`} aria-hidden="true">
-              ▾
-            </span>
-          </button>
-          {compatOpen && (
-            <ul className="lora-compat-reasons">
-              {compat.reasons.map((r, i) => (
-                <li key={i} className={`lora-compat-reason-${r.kind}`}>
-                  {r.kind === 'bad' ? '❌ ' : r.kind === 'warn' ? '⚠ ' : 'ℹ '}
-                  {r.text}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
 
       {open && (
         <div className="lora-rows">

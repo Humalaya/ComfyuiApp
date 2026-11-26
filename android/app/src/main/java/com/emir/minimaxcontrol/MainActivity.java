@@ -4,6 +4,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.CapConfig;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
@@ -25,11 +26,16 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(KeepAlivePlugin.class);
         registerPlugin(SaveMediaPlugin.class);
         registerPlugin(ClipboardImagePlugin.class);
+        // A PC address saved from the phone (ServerAddress.java) replaces the
+        // APK's built-in server.url — must be set before the bridge is built.
+        String overrideDir = ServerAddress.writeConfigOverride(this);
+        if (overrideDir != null) this.config = CapConfig.loadFromFile(this, overrideDir);
         super.onCreate(savedInstanceState);
         // For offline.html — see WakeOnLan.java for why this isn't a plugin.
         // Takes effect from the next page load, which is exactly when the
         // offline page appears (the WebView swaps to it after the PC fails).
         getBridge().getWebView().addJavascriptInterface(new WakeOnLan(), WakeOnLan.JS_NAME);
+        getBridge().getWebView().addJavascriptInterface(new ServerAddress(this), ServerAddress.JS_NAME);
         probeServer(1);
     }
 

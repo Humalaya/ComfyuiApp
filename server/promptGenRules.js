@@ -3,7 +3,10 @@
 // route in promptgen.js and offline prompt tests build exactly the same
 // messages.
 
-export const PROMPT_TARGETS = new Set(['sdxl', 'krea2', 'krea2edit', 'anime2real', 'video'])
+export const PROMPT_TARGETS = new Set(['sdxl', 'krea2', 'krea2edit', 'anime2real', 'video', 'videoref'])
+
+// Both MiniMax H3 modes: first/last frame (video) and reference (videoref).
+const isVideo = (target) => target === 'video' || target === 'videoref'
 
 // The app's Kısa / Orta / Uzun / Go nuts choice (promptGenPresets.ts). The
 // tab's system text carries no length rule of its own: this line, appended
@@ -39,7 +42,7 @@ const VIDEO_AUDIO_SENTENCES = {
 }
 const VIDEO_LENGTH_NAME = { short: 'short', medium: 'medium', long: 'long and richly detailed' }
 
-function videoRule(length, context) {
+function videoRule(length, context, field) {
   if (length === 'nuts')
     return 'Length: no limit — make every field as rich and detailed as you find useful. Stop when the prompt is complete.'
   const m = /duration:\s*([\d.]+)/i.exec(context || '')
@@ -48,11 +51,12 @@ function videoRule(length, context) {
   const round10 = (n) => Math.max(10, Math.round(n / 10) * 10)
   const min = Math.max(VIDEO_MIN_WORDS[length], round10(lo * seconds))
   const max = Math.max(min + 20, round10(hi * seconds))
-  return `Length: ${VIDEO_LENGTH_NAME[length]} — integrated_multimodal_description about ${min} to ${max} words for this ${seconds.toFixed(1)}-second video; ${VIDEO_AUDIO_SENTENCES[length]}.`
+  return `Length: ${VIDEO_LENGTH_NAME[length]} — ${field} about ${min} to ${max} words for this ${seconds.toFixed(1)}-second video; ${VIDEO_AUDIO_SENTENCES[length]}.`
 }
 
 export function lengthRule(target, length, context) {
-  if (target === 'video') return videoRule(length, context)
+  if (isVideo(target))
+    return videoRule(length, context, target === 'videoref' ? 'detailed_description' : 'integrated_multimodal_description')
   return IMAGE_RULES[target]?.[length] ?? null
 }
 
@@ -67,9 +71,9 @@ const DEFAULT_TOKENS = { image: 600, video: 1500 } // targets without a length c
 const THINKING_EXTRA = 5000
 
 export function maxTokensFor(target, length, thinking) {
-  const hasLength = target === 'video' || !!IMAGE_RULES[target]
+  const hasLength = isVideo(target) || !!IMAGE_RULES[target]
   if (hasLength && length === 'nuts') return undefined
-  const kind = target === 'video' ? 'video' : 'image'
+  const kind = isVideo(target) ? 'video' : 'image'
   const base = (hasLength && LENGTH_TOKENS[length]?.[kind]) || DEFAULT_TOKENS[kind]
   return thinking ? base + THINKING_EXTRA : base
 }

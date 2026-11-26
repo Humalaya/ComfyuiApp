@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { mergeLoras, type LoraAdd } from '../workflow/loraMerge'
 import { NumberField } from './NumberField'
 import { LoraList } from './LoraList'
 import { ImageUploader } from './ImageUploader'
@@ -41,7 +42,7 @@ interface CompletedItem {
 interface Props {
   // Pushed from App.tsx when Galeri sends a picture (or an Anime2Real PNG's
   // settings) here — reacts only when `id` changes, see ImageGenerateTab.tsx.
-  importRequest?: { settings: Partial<Anime2RealSettings>; id: number } | null
+  importRequest?: { settings: Partial<Anime2RealSettings>; id: number; addLoras?: LoraAdd[] } | null
 }
 
 // Edit (Flux) — edits a picture with Krea2's edit pipeline: by a plain
@@ -77,7 +78,10 @@ export function Anime2RealGenerateTab({ importRequest }: Props) {
 
   useEffect(() => {
     if (!importRequest) return
-    setSettings((s) => ({ ...s, ...importRequest.settings }))
+    setSettings((s) => {
+      const next = { ...s, ...importRequest.settings }
+      return importRequest.addLoras ? { ...next, loras: mergeLoras(next.loras, importRequest.addLoras).loras } : next
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 

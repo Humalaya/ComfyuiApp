@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { mergeLoras, type LoraAdd } from '../workflow/loraMerge'
 import { NumberField } from './NumberField'
 import { LoraList } from './LoraList'
 import { GenerationPreview } from './GenerationPreview'
@@ -37,7 +38,7 @@ interface CompletedItem {
 interface Props {
   // Pushed from App.tsx when Galeri's "Ayarları Gönder" targets this tab —
   // see ImageGenerateTab.tsx's identical prop for the full rationale.
-  importRequest?: { settings: Partial<Krea2GenerationSettings>; id: number } | null
+  importRequest?: { settings: Partial<Krea2GenerationSettings>; id: number; addLoras?: LoraAdd[] } | null
 }
 
 // Krea2 (FLUX) Text2Img — a completely different pipeline from the SDXL one
@@ -87,7 +88,10 @@ export function Krea2GenerateTab({ importRequest }: Props) {
   // identical effect) — reacts only to `id` changing.
   useEffect(() => {
     if (!importRequest) return
-    setSettings((s) => ({ ...s, ...importRequest.settings }))
+    setSettings((s) => {
+      const next = { ...s, ...importRequest.settings }
+      return importRequest.addLoras ? { ...next, loras: mergeLoras(next.loras, importRequest.addLoras).loras } : next
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest?.id])
 
