@@ -1,0 +1,253 @@
+{
+  "260": {
+    "inputs": {
+      "unet_name": "Image/qwen_image_2.1_turbo_bf16.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "image/qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "image/qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "78": {
+    "inputs": {
+      "image": ""
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "IMAGE 1"
+    }
+  },
+  "320": {
+    "inputs": {
+      "image": ""
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "IMAGE 2"
+    }
+  },
+  "328": {
+    "inputs": {
+      "image": ""
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "IMAGE 3"
+    }
+  },
+  "330": {
+    "inputs": {
+      "image": ""
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "IMAGE 4"
+    }
+  },
+  "262": {
+    "inputs": {
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "crop",
+      "method": "lanczos",
+      "round_to_multiple": "16",
+      "scale_to_longest_side": true,
+      "longest_side": 1920,
+      "image": [
+        "78",
+        0
+      ]
+    },
+    "class_type": "LayerUtility: ImageScaleByAspectRatio",
+    "_meta": {
+      "title": "Scale 78"
+    }
+  },
+  "319": {
+    "inputs": {
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "crop",
+      "method": "lanczos",
+      "round_to_multiple": "16",
+      "scale_to_longest_side": true,
+      "longest_side": 1920,
+      "image": [
+        "320",
+        0
+      ]
+    },
+    "class_type": "LayerUtility: ImageScaleByAspectRatio",
+    "_meta": {
+      "title": "Scale 320"
+    }
+  },
+  "329": {
+    "inputs": {
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "crop",
+      "method": "lanczos",
+      "round_to_multiple": "16",
+      "scale_to_longest_side": true,
+      "longest_side": 1536,
+      "image": [
+        "328",
+        0
+      ]
+    },
+    "class_type": "LayerUtility: ImageScaleByAspectRatio",
+    "_meta": {
+      "title": "Scale 328"
+    }
+  },
+  "331": {
+    "inputs": {
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "crop",
+      "method": "lanczos",
+      "round_to_multiple": "16",
+      "scale_to_longest_side": true,
+      "longest_side": 1536,
+      "image": [
+        "330",
+        0
+      ]
+    },
+    "class_type": "LayerUtility: ImageScaleByAspectRatio",
+    "_meta": {
+      "title": "Scale 330"
+    }
+  },
+  "317": {
+    "inputs": {
+      "prompt": "",
+      "negative_prompt": "",
+      "resolution": 0,
+      "clip": [
+        "38",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ],
+      "images.image_1": [
+        "262",
+        0
+      ],
+      "images.image_2": [
+        "319",
+        0
+      ],
+      "images.image_3": [
+        "329",
+        0
+      ],
+      "images.image_4": [
+        "331",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21",
+    "_meta": {
+      "title": "Text Encode Qwen Image 2.1"
+    }
+  },
+  "172": {
+    "inputs": {
+      "width": 1440,
+      "height": 1920,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Custom Size"
+    }
+  },
+  "252": {
+    "inputs": {
+      "seed": 570344241697658,
+      "steps": 30,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "beta",
+      "denoise": 1,
+      "model": [
+        "260",
+        0
+      ],
+      "positive": [
+        "317",
+        0
+      ],
+      "negative": [
+        "317",
+        1
+      ],
+      "latent_image": [
+        "317",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "252",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "60": {
+    "inputs": {
+      "filename_prefix": "krea/%year%-%month%-%day%/QwenEdit",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

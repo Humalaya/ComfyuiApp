@@ -4,8 +4,10 @@ import {
   civitaiPageUrl,
   civitaiThumbUrl,
   fetchCivitaiGeneration,
+  fetchCivitaiImage,
   fetchCivitaiImageTags,
   fetchCivitaiPage,
+  parseCivitaiLink,
   sendCivitaiImageToInput,
   type CivitaiGeneration,
   type CivitaiItem,
@@ -15,7 +17,7 @@ import {
 } from '../api/civitaiBrowser'
 import { CivitaiTagBar } from './CivitaiTagPicker'
 import { CivitaiModelFeed } from './CivitaiModelFeed'
-import { BASE_MODELS, formatCount, PERIODS, rememberCivitaiTag } from './civitaiShared'
+import { BASE_MODELS, formatCount, PERIODS } from './civitaiShared'
 import { useObjectInfo } from '../hooks/useObjectInfo'
 import { useSwipe } from '../hooks/useSwipe'
 import { civitaiToImport, type ImportKind } from '../workflow/civitaiImport'
@@ -23,6 +25,7 @@ import type { ImportPayload } from './Gallery'
 import { useBackHandler } from '../native/backButton'
 import { CivitaiModelPage, type ModelRef } from './CivitaiModelPage'
 import { CivitaiLoraSend, type PostLora } from './CivitaiLoraSend'
+import { CivitaiPostsPage, type PostsSource } from './CivitaiPostsPage'
 
 interface Props {
   onSendToCreate: (payload: ImportPayload) => void
@@ -51,7 +54,15 @@ const DEFAULT_QUERY: CivitaiQuery = {
   modelSort: 'Most Downloaded',
   modelTypes: [],
   tag: null,
+  tags: [],
+  excludedTags: [],
 }
+
+const asTag = (v: unknown): CivitaiTag | null => {
+  const t = v as { id?: unknown; name?: unknown } | null
+  return t && typeof t.id === 'number' && typeof t.name === 'string' ? { id: t.id, name: t.name } : null
+}
+const asTags = (v: unknown): CivitaiTag[] => (Array.isArray(v) ? v.map(asTag).filter((t): t is CivitaiTag => t !== null) : [])
 
 // The filters are remembered per device — reopening the view shouldn't reset
 // NSFW / model choices every time.
@@ -69,8 +80,14 @@ function loadQuery(): CivitaiQuery {
     query.modelVersion = mv && typeof mv.id === 'number' && typeof mv.name === 'string' ? { id: mv.id, name: mv.name } : null
     if (!['image', 'video', 'models'].includes(query.type)) query.type = 'image'
     if (!['Most Downloaded', 'Highest Rated', 'Newest'].includes(query.modelSort)) query.modelSort = 'Most Downloaded'
-    const tag = query.tag as unknown as { id?: unknown; name?: unknown } | null
-    query.tag = tag && typeof tag.id === 'number' && typeof tag.name === 'string' ? { id: tag.id, name: tag.name } : null
+    query.tag = asTag(query.tag)
+    query.tags = asTags(query.tags)
+    query.excludedTags = asTags(query.excludedTags)
+    // Saved before multi-tag: one tag for whichever list was open.
+    if (saved && !('tags' in saved) && query.tag && query.type !== 'models') {
+      query.tags = [query.tag]
+      query.tag = null
+    }
     query.modelTypes = Array.isArray(query.modelTypes) ? query.modelTypes.filter((v) => typeof v === 'string') : []
     return query
   } catch {
@@ -99,6 +116,11 @@ export function CivitaiBrowser({ onSendToCreate, onOpenModels, modelRequest }: P
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
   // A tapped model (resource chip) — its page covers the feed.
   const [modelPage, setModelPage] = useState<ModelRef | null>(null)
+  // A user's (or one post's) posts — over the feed and a model page.
+  const [postsPage, setPostsPage] = useState<PostsSource | null>(null)
+  // 🔗: a pasted Civitai link, and a single post opened from one.
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkItem, setLinkItem] = useState<CivitaiItem | null>(null)
   useEffect(() => {
     if (modelRequest) setModelPage(modelRequest)
   }, [modelRequest])
@@ -141,24 +163,29 @@ export function CivitaiBrowser({ onSendToCreate, onOpenModels, modelRequest }: P
       if (patch.type && patch.type !== q.type) {
         next.baseModels = []
         next.modelVersion = null
-        // Posts and models have separate tag lists (videos share images').
-        if (!('tag' in patch) && (patch.type === 'models' || q.type === 'models')) next.tag = null
       }
       return next
     })
   }
 
+  const pickTag = (tag: CivitaiTag, type?: 'image' | 'video') => update({ ...(type ? { type } : {}), tags: [tag] })
+
   return (
     <div className="civitai-browser">
-      <div className="seg seg-accent">
-        <button type="button" className={seg(query.type === 'image')} onClick={() => update({ type: 'image' })}>
-          Görseller
-        </button>
-        <button type="button" className={seg(query.type === 'video')} onClick={() => update({ type: 'video' })}>
-          Videolar
-        </button>
-        <button type="button" className={seg(query.type === 'models')} onClick={() => update({ type: 'models' })}>
-          Modeller
+      <div className="civitai-top-row">
+        <div className="seg seg-accent">
+          <button type="button" className={seg(query.type === 'image')} onClick={() => update({ type: 'image' })}>
+            Görseller
+          </button>
+          <button type="button" className={seg(query.type === 'video')} onClick={() => update({ type: 'video' })}>
+            Videolar
+          </button>
+          <button type="button" className={seg(query.type === 'models')} onClick={() => update({ type: 'models' })}>
+            Modeller
+          </button>
+        </div>
+        <button type="button" className="icon-button civitai-link-button" onClick={() => setLinkOpen(true)} aria-label="Civitai linki aç">
+          🔗
         </button>
       </div>
 
@@ -243,7 +270,13 @@ export function CivitaiBrowser({ onSendToCreate, onOpenModels, modelRequest }: P
             </div>
           )}
 
-          <CivitaiTagBar kind="image" tag={query.tag} onChange={(tag) => update({ tag })} />
+          <CivitaiTagBar
+            kind="image"
+            multi
+            included={query.tags}
+            excluded={query.excludedTags}
+            onChange={(tags, excludedTags) => update({ tags, excludedTags })}
+          />
 
           {error && (
             // Civitai's API throws the odd transient 503 — retry the same page.
@@ -266,7 +299,9 @@ export function CivitaiBrowser({ onSendToCreate, onOpenModels, modelRequest }: P
           </div>
 
           {!loading && !error && items.length === 0 && (
-            <div className="empty-state">{query.tag ? `"${query.tag.name}" etiketiyle bu filtrelerde post yok.` : 'Sonuç yok.'}</div>
+            <div className="empty-state">
+              {query.tags.length + query.excludedTags.length > 0 ? 'Bu etiketlerle ve filtrelerle post yok.' : 'Sonuç yok.'}
+            </div>
           )}
           {loading && <div className="spinner" aria-label="Yükleniyor" />}
           {!loading && cursor && (
@@ -293,8 +328,12 @@ export function CivitaiBrowser({ onSendToCreate, onOpenModels, modelRequest }: P
           }}
           onPickTag={(tag) => {
             setViewerIndex(null)
-            rememberCivitaiTag('image', tag)
-            update({ tag })
+            pickTag(tag)
+          }}
+          // The viewer sits above every page — closed, so the profile shows.
+          onPickUser={(username) => {
+            setViewerIndex(null)
+            setPostsPage({ username })
           }}
         />
       )}
@@ -311,17 +350,139 @@ export function CivitaiBrowser({ onSendToCreate, onOpenModels, modelRequest }: P
           onOpenModels={onOpenModels}
           onPickTag={(tag, type) => {
             setModelPage(null)
-            rememberCivitaiTag('image', tag)
-            update({ type, tag })
+            pickTag(tag, type)
           }}
           onPickModelTag={(name) => {
             setModelPage(null)
-            const tag = { id: 0, name } // Modeller filters by name
-            rememberCivitaiTag('model', tag)
-            update({ type: 'models', tag })
+            update({ type: 'models', tag: { id: 0, name } }) // Modeller filters by name
+          }}
+          onPickUser={(username) => setPostsPage({ username })}
+        />
+      )}
+
+      {postsPage && (
+        <CivitaiPostsPage
+          key={'username' in postsPage ? `u:${postsPage.username}` : `p:${postsPage.postId}`}
+          source={postsPage}
+          onClose={() => setPostsPage(null)}
+          onOpenUser={(username) => setPostsPage({ username })}
+          onOpenModel={(ref) => {
+            setPostsPage(null)
+            setModelPage(ref)
+          }}
+          onSendToCreate={(payload) => {
+            setPostsPage(null)
+            onSendToCreate(payload)
+          }}
+          onPickTag={(tag, type) => {
+            setPostsPage(null)
+            setModelPage(null)
+            pickTag(tag, type)
           }}
         />
       )}
+
+      {linkItem && (
+        <CivitaiViewer
+          items={[linkItem]}
+          index={0}
+          onIndexChange={() => {}}
+          onClose={() => setLinkItem(null)}
+          onSend={(payload) => {
+            setLinkItem(null)
+            onSendToCreate(payload)
+          }}
+          onPickModel={(mv, type) => {
+            setLinkItem(null)
+            setModelPage({ versionId: mv.id, type })
+          }}
+          onPickTag={(tag, type) => {
+            setLinkItem(null)
+            pickTag(tag, type)
+          }}
+          onPickUser={(username) => {
+            setLinkItem(null)
+            setPostsPage({ username })
+          }}
+        />
+      )}
+
+      {linkOpen && (
+        <CivitaiLinkDialog
+          onClose={() => setLinkOpen(false)}
+          onOpen={async (text) => {
+            const link = parseCivitaiLink(text)
+            if (!link) throw new Error('Tanınmayan link. Civitai model, görsel, post ya da kullanıcı linki yapıştır.')
+            if (link.kind === 'image') {
+              const item = await fetchCivitaiImage(link.id)
+              setLinkItem(item)
+            } else if (link.kind === 'model') setModelPage({ modelId: link.modelId, versionId: link.versionId })
+            else if (link.kind === 'post') setPostsPage({ postId: link.id })
+            else setPostsPage({ username: link.username })
+            setLinkOpen(false)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// 🔗 — paste a civitai.com link (a model, a picture / video, a post, a
+// user) and it opens here, in the app's own pages.
+function CivitaiLinkDialog({ onClose, onOpen }: { onClose: () => void; onOpen: (text: string) => Promise<void> }) {
+  useBackHandler(true, onClose)
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function open(value = text) {
+    setBusy(true)
+    setError(null)
+    try {
+      await onOpen(value)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function paste() {
+    try {
+      const clip = (await navigator.clipboard.readText()).trim()
+      if (!clip) return
+      setText(clip)
+      open(clip)
+    } catch {
+      setError('Pano okunamadı — kutuya uzun basıp yapıştır.')
+    }
+  }
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Civitai linki aç" className="popup-overlay media-action-overlay" onClick={onClose}>
+      <div className="media-action-menu civitai-link-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="gallery-lock-title">🔗 Civitai linki aç</div>
+        <input
+          type="url"
+          inputMode="url"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && text.trim() && open()}
+          placeholder="https://civitai.com/models/… · /images/… · /user/…"
+          aria-label="Civitai linki"
+          autoFocus
+        />
+        {error && <div className="field-error">{error}</div>}
+        <button type="button" className="generate-button" disabled={!text.trim() || busy} onClick={() => open()}>
+          {busy ? 'Açılıyor…' : 'Aç'}
+        </button>
+        <button type="button" className="secondary-button" disabled={busy} onClick={paste}>
+          📋 Panodan yapıştır ve aç
+        </button>
+        <button type="button" className="secondary-button" onClick={onClose}>
+          Kapat
+        </button>
+      </div>
     </div>
   )
 }
@@ -335,11 +496,13 @@ interface ViewerProps {
   onPickModel: (modelVersion: { id: number; name: string }, type: 'image' | 'video') => void
   // A tapped tag of the post — shows that tag's posts.
   onPickTag?: (tag: CivitaiTag, type: 'image' | 'video') => void
+  // The poster's name tapped — their posts.
+  onPickUser?: (username: string) => void
 }
 
 const TAGS_SHOWN = 12
 
-export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, onPickModel, onPickTag }: ViewerProps) {
+export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, onPickModel, onPickTag, onPickUser }: ViewerProps) {
   const item = items[index]
   const hasPrev = index > 0
   const hasNext = index < items.length - 1
@@ -354,7 +517,7 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
   const [sendOpen, setSendOpen] = useState(false)
   // "Resmi gönder": the picture itself as an input image, not its settings.
   const [imageSendOpen, setImageSendOpen] = useState(false)
-  const [imageSending, setImageSending] = useState<'video' | 'anime2real' | null>(null)
+  const [imageSending, setImageSending] = useState<'video' | 'qwenedit' | null>(null)
   // "LoRA gönder": the post's LoRAs that are on this PC, into a Create tab.
   const [loraSendOpen, setLoraSendOpen] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
@@ -466,7 +629,18 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
 
         <div className="civitai-viewer-info">
           <div className="civitai-viewer-byline">
-            <span className="civitai-viewer-user">{item.username ?? 'anonim'}</span>
+            {item.username && onPickUser ? (
+              <button
+                type="button"
+                className="civitai-viewer-user civitai-viewer-user-link"
+                onClick={() => onPickUser(item.username!)}
+                aria-label={`${item.username} kullanıcısının paylaşımları`}
+              >
+                👤 {item.username}
+              </button>
+            ) : (
+              <span className="civitai-viewer-user">{item.username ?? 'anonim'}</span>
+            )}
             <span>{new Date(item.createdAt).toLocaleDateString('tr-TR')}</span>
             <span>♥ {formatCount(item.reactions)}</span>
             {item.baseModel && <span className="civitai-viewer-base">{item.baseModel}</span>}
@@ -575,7 +749,7 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
               {(
                 [
                   { target: 'video', label: 'MiniMax (ilk kare)' },
-                  { target: 'anime2real', label: 'Edit (Flux)' },
+                  { target: 'qwenedit', label: 'Edit (Qwen)' },
                 ] as const
               ).map((t) => (
                 <button
@@ -593,7 +767,7 @@ export function CivitaiViewer({ items, index, onIndexChange, onClose, onSend, on
                               kind: 'video',
                               settings: { inputImage, inputImageEnabled: true },
                             }
-                          : { kind: 'anime2real', settings: { inputImage } },
+                          : { kind: 'qwenedit', settings: { inputImage } },
                       )
                     } catch (err) {
                       alert(`Gönderilemedi: ${(err as Error).message}`)

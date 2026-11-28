@@ -24,6 +24,7 @@ import sharp from 'sharp'
 import { registerModelRoutes } from './models.js'
 import { registerPromptGenRoutes } from './promptgen.js'
 import { registerGalleryLockRoutes } from './galleryLock.js'
+import { registerTextEncoderRoutes } from './textEncoders.js'
 import { recordPromptHistory, registerPromptLibraryRoutes } from './promptLibrary.js'
 import { registerSystemStatsRoutes } from './systemStats.js'
 import { appVersion, attachComfyWsProxy, comfyHttpProxy, serveBuiltApp } from './webapp.js'
@@ -404,7 +405,7 @@ async function ensurePlayablePath(filePath, mtimeMs) {
 // app was opened again. The phone now only adds/removes items and follows
 // along. Saved to disk on every change so a panel restart doesn't drop
 // what's waiting.
-const GENERATION_KINDS = ['video', 'sdxl', 'krea2', 'anime2real']
+const GENERATION_KINDS = ['video', 'sdxl', 'krea2', 'qwenedit']
 const GEN_STATE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cache', 'generation-state.json')
 // Per kind: { promptId, startedAt, titles, nodeCount, done, finishedAt? } | null
 const remoteJobs = Object.fromEntries(GENERATION_KINDS.map((k) => [k, null]))
@@ -456,6 +457,7 @@ app.use(comfyHttpProxy(COMFY_PROXY_TARGET)) // before express.json: streams bodi
 app.use(express.json({ limit: '50mb' })) // queued items carry their full ComfyUI workflow
 registerGalleryLockRoutes(app) // before the /api/outputs routes: guards them while locked
 registerPromptLibraryRoutes(app, GENERATION_KINDS)
+registerTextEncoderRoutes(app)
 registerSystemStatsRoutes(app)
 
 app.get('/api/outputs/sources', (_req, res) => {
@@ -687,11 +689,31 @@ const CIVITAI_LEVEL_NSFW = 4 + 8 + 16
 // and answers in well under a second. civitai.com's copy of the endpoint is
 // SFW-only even when logged in, hence .red.
 // Undocumented — if its shape changes, this is the part to revisit.
-async function civitaiFeed({ sort, period, type, baseModels, modelVersionId, tagId, withMeta, nsfwOnly, cursor }) {
+async function civitaiFeed({
+  sort,
+  period,
+  type,
+  baseModels,
+  modelVersionId,
+  tagIds,
+  excludedTagIds,
+  username,
+  postId,
+  withMeta,
+  nsfwOnly,
+  cursor,
+}) {
   const browsingLevel = nsfwOnly ? CIVITAI_LEVEL_NSFW : CIVITAI_LEVEL_ALL
-  const input = { period, sort, browsingLevel, types: [type], withMeta, limit: 40 }
-  // A Civitai tag (category or any searched tag) — combines with the rest.
-  if (tagId) input.tags = [tagId]
+  // 'all': images and videos together (a user's or a post's page).
+  const input = { period, sort, browsingLevel, types: type === 'all' ? ['image', 'video'] : [type], withMeta, limit: 40 }
+  // Civitai tags (categories or searched ones) — combine with the rest;
+  // excluded ones drop every post carrying them.
+  if (tagIds.length > 0) input.tags = tagIds
+  if (excludedTagIds.length > 0) input.excludedTagIds = excludedTagIds
+  // One user's posts (their profile).
+  if (username) input.username = username
+  // One post's pictures (an opened civitai.com/posts/… link).
+  if (postId) input.postId = postId
   // A specific model version (tapped in a post's resource list) — implies
   // its base model, so the base model filter is left off then.
   if (modelVersionId) input.modelVersionId = modelVersionId
@@ -704,28 +726,59 @@ async function civitaiFeed({ sort, period, type, baseModels, modelVersionId, tag
   data = typeof data === 'string' ? civitaiUnflatten(JSON.parse(data)) : data?.json
   if (!data || !Array.isArray(data.items)) throw new HttpError(502, 'Civitai yanıtı tanınmadı.')
   return {
-    items: data.items.map((it) => {
-      const s = it.stats ?? {}
-      return {
-        id: it.id,
-        url: `${CIVITAI_CDN}/${it.url}/original=true/${encodeURIComponent(it.name || it.url)}`,
-        type: it.type === 'video' ? 'video' : 'image',
-        width: it.width,
-        height: it.height,
-        createdAt: it.publishedAt || it.createdAt,
-        // The feed leaves baseModel empty — a single-model filter is the answer.
-        baseModel: it.baseModel || (baseModels.length === 1 ? baseModels[0] : null),
-        username: it.user?.username || null,
-        reactions: (s.likeCountAllTime ?? 0) + (s.heartCountAllTime ?? 0) + (s.laughCountAllTime ?? 0) + (s.cryCountAllTime ?? 0),
-        comments: s.commentCountAllTime ?? 0,
-        // Not in the feed; the viewer fetches prompt/settings on open
-        // (/api/civitai/generation).
-        meta: null,
-      }
-    }),
+    items: data.items.map((it) => civitaiItem(it, baseModels)),
     nextCursor: data.nextCursor != null ? String(data.nextCursor) : null,
   }
 }
+
+// One tRPC image (feed entry or image.get) → the app's CivitaiItem.
+function civitaiItem(it, baseModels = []) {
+  const s = it.stats ?? {}
+  return {
+    id: it.id,
+    url: `${CIVITAI_CDN}/${it.url}/original=true/${encodeURIComponent(it.name || it.url)}`,
+    type: it.type === 'video' ? 'video' : 'image',
+    width: it.width,
+    height: it.height,
+    createdAt: it.publishedAt || it.createdAt,
+    // The feed leaves baseModel empty — a single-model filter is the answer.
+    baseModel: it.baseModel || (baseModels.length === 1 ? baseModels[0] : null),
+    username: it.user?.username || null,
+    postId: it.postId ?? null,
+    reactions: (s.likeCountAllTime ?? 0) + (s.heartCountAllTime ?? 0) + (s.laughCountAllTime ?? 0) + (s.cryCountAllTime ?? 0),
+    comments: s.commentCountAllTime ?? 0,
+    // Not in the feed; the viewer fetches prompt/settings on open
+    // (/api/civitai/generation).
+    meta: null,
+  }
+}
+
+// One image / video by id — an opened civitai.com/images/… link.
+app.get('/api/civitai/image', async (req, res) => {
+  try {
+    const id = Number(req.query.id)
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Geçersiz id.')
+    const body = await fetchCivitaiJson(
+      `https://civitai.red/api/trpc/image.get?input=${encodeURIComponent(JSON.stringify({ json: { id } }))}`,
+    )
+    let data = body?.result?.data
+    data = typeof data === 'string' ? civitaiUnflatten(JSON.parse(data)) : data?.json
+    if (!data?.url) throw new HttpError(404, 'Görsel bulunamadı.')
+    res.json(civitaiItem(data))
+  } catch (err) {
+    sendError(res, err, 'Civitai görseli alınamadı.')
+  }
+})
+
+// "1,2,3" → [1, 2, 3] (positive integers only, at most 20).
+const idList = (v) =>
+  typeof v === 'string'
+    ? v
+        .split(',')
+        .map(Number)
+        .filter((n) => Number.isInteger(n) && n > 0)
+        .slice(0, 20)
+    : []
 
 app.get('/api/civitai/images', async (req, res) => {
   try {
@@ -734,14 +787,17 @@ app.get('/api/civitai/images', async (req, res) => {
       await civitaiFeed({
         sort,
         period: sort === 'Newest' ? 'AllTime' : CIVITAI_PERIODS.has(req.query.period) ? req.query.period : 'Week',
-        type: req.query.type === 'video' ? 'video' : 'image',
+        type: req.query.type === 'video' || req.query.type === 'all' ? req.query.type : 'image',
         // Comma-separated; Civitai's base model names never contain commas.
         baseModels: typeof req.query.baseModels === 'string' ? req.query.baseModels.split(',').filter(Boolean) : [],
         modelVersionId:
           Number.isInteger(Number(req.query.modelVersionId)) && Number(req.query.modelVersionId) > 0
             ? Number(req.query.modelVersionId)
             : null,
-        tagId: Number.isInteger(Number(req.query.tagId)) && Number(req.query.tagId) > 0 ? Number(req.query.tagId) : null,
+        tagIds: idList(req.query.tagIds ?? req.query.tagId),
+        excludedTagIds: idList(req.query.excludedTagIds),
+        username: typeof req.query.username === 'string' && /^[\w.-]{1,64}$/.test(req.query.username) ? req.query.username : '',
+        postId: Number.isInteger(Number(req.query.postId)) && Number(req.query.postId) > 0 ? Number(req.query.postId) : null,
         withMeta: req.query.withMeta === 'true',
         nsfwOnly: req.query.nsfwOnly === 'true',
         cursor: typeof req.query.cursor === 'string' ? req.query.cursor : '',
@@ -849,7 +905,7 @@ app.get('/api/civitai/image-tags', async (req, res) => {
 // prompt, settings, size and checkpoint/LoRAs of an opened post. Best-effort:
 // any failure just means "no info".
 // Puts a Civitai image into ComfyUI's input folder, so it can be used as an
-// input picture (the video tab's first frame, Anime2Real's input). Done
+// input picture (the video tab's first frame, Edit's picture 1). Done
 // here rather than on the phone: the PC fetches it straight from Civitai's
 // CDN — the phone would otherwise download the full-size original over
 // mobile data only to upload it right back. Only Civitai's image CDN is

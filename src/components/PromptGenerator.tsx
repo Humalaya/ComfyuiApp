@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { cancelPromptGen, getPromptGen, startPromptGen, type PromptGenJob } from '../api/promptGenClient'
 import { useBackHandler } from '../native/backButton'
+import { droppedParts } from '../utils/promptText'
 import { PromptLibraryPanel, type PromptLibraryProps } from './PromptLibrary'
 import {
   DEFAULT_PROMPT_GEN_SYSTEM,
@@ -50,6 +51,7 @@ function save(key: string, value: string | null) {
 }
 
 type View = 'ask' | 'result' | 'revise'
+
 
 // The ✨ button next to a Prompt box: describe what you want (any
 // language), the PC's local LLM writes the prompt in this tab's style
@@ -127,6 +129,7 @@ export function PromptGenerator({ target, context, onUse, postProcess, library }
                 key={target}
                 target={target}
                 context={context}
+                boxPrompt={library?.prompt}
                 postProcess={postProcess}
                 onUse={(text) => {
                   onUse(text)
@@ -141,7 +144,7 @@ export function PromptGenerator({ target, context, onUse, postProcess, library }
   )
 }
 
-function PromptGenBody({ target, context, onUse, postProcess }: Props) {
+function PromptGenBody({ target, context, onUse, postProcess, boxPrompt }: Props & { boxPrompt?: string }) {
   // v2: v1 could store an outdated default as if it were the user's own
   // edit (a live code update kept the old text in state, and an effect saved
   // it). Only an actual edit is stored now, and old v1 values are ignored.
@@ -167,9 +170,15 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
   const [result, setResult] = useState(() => load(resultKey, ''))
   const [view, setView] = useState<View>(() => (load(resultKey, '') ? 'result' : 'ask'))
   const [feedback, setFeedback] = useState('')
+  // The prompt being edited in the 'revise' view: the last suggestion
+  // ("Tekrar"), or the one already in the tab's box ("✏️ Düzenle").
+  const [editBase, setEditBase] = useState('')
+  // After an edit: what went in and what was asked — for droppedParts.
+  const [lastEdit, setLastEdit] = useState<{ before: string; request: string } | null>(null)
   const [job, setJob] = useState<PromptGenJob | null>(null)
   const [error, setError] = useState<string | null>(null)
   const pollTimer = useRef<number | null>(null)
+  const pendingEdit = useRef<{ before: string; request: string } | null>(null)
 
   useEffect(() => save(draftKey, request || null), [draftKey, request])
   function editSystem(text: string) {
@@ -198,6 +207,8 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
         save(jobKey, null)
         if (j.status === 'done' && j.result) {
           setResult(postProcess ? postProcess(j.result) : j.result)
+          setLastEdit(pendingEdit.current)
+          pendingEdit.current = null
           setFeedback('')
           setView('result')
         } else setError(j.error || 'Üretilemedi.')
@@ -210,16 +221,19 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
     }, 800)
   }
 
+  // revision: an edit of editBase by `feedback` (server's edit mode — only
+  // the asked change, no length rule).
   async function generate(revision: boolean) {
     setError(null)
+    pendingEdit.current = revision ? { before: editBase, request: feedback } : null
     try {
       const j = await startPromptGen({
         target,
         system,
-        request,
+        request: revision ? '' : request,
         context,
-        ...(hasLength ? { length } : {}),
-        ...(revision ? { previous: result, feedback } : {}),
+        ...(hasLength && !revision ? { length } : {}),
+        ...(revision ? { previous: editBase, feedback } : {}),
       })
       setJob(j)
       save(jobKey, j.id)
@@ -230,9 +244,23 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
   }
 
   const customized = system !== DEFAULT_PROMPT_GEN_SYSTEM[target]
+  const dropped = lastEdit ? droppedParts(lastEdit.before, result, lastEdit.request) : []
+
+  function startEdit(base: string) {
+    setEditBase(base)
+    setFeedback('')
+    setView('revise')
+  }
 
   return (
     <>
+      {/* On every page but the edit itself — the pop-up reopens on the last
+          suggestion, so an "ask"-only button stayed hidden there. */}
+      {!running && view !== 'revise' && boxPrompt?.trim() && (
+        <button type="button" className="secondary-button prompt-gen-edit-box" onClick={() => startEdit(boxPrompt)}>
+          ✏️ Kutudaki promptu düzenle
+        </button>
+      )}
       {running ? (
         <div className="prompt-gen-running">
           <div className="spinner" aria-label="Çalışıyor" />
@@ -281,7 +309,15 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
               {length === 'nuts' && <span className="field-hint">Uzunluk sınırı yok — model ne zaman bitirmek isterse orada bitirir.</span>}
             </div>
           )}
-          <button type="button" className="generate-button" disabled={!request.trim()} onClick={() => generate(false)}>
+          <button
+            type="button"
+            className="generate-button"
+            disabled={!request.trim()}
+            onClick={() => {
+              setLastEdit(null)
+              generate(false)
+            }}
+          >
             ✨ Üret
           </button>
           {result && (
@@ -295,15 +331,23 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
           <span className="prompt-gen-label">Öneri</span>
           <textarea
             className="prompt-textarea prompt-gen-result"
-            rows={target === 'video' ? 12 : 6}
+            rows={target === 'video' || target === 'videoref' ? 12 : 6}
             value={result}
             onChange={(e) => setResult(e.target.value)}
           />
+          {dropped.length > 0 && (
+            <div className="field-hint prompt-gen-dropped">
+              ⚠ Düzenlemede çıkanlar: {dropped.join(', ')}
+              <button type="button" className="prompt-gen-link" onClick={() => lastEdit && setResult(lastEdit.before)}>
+                Öncekine dön
+              </button>
+            </div>
+          )}
           <div className="prompt-gen-actions">
             <button type="button" className="generate-button" onClick={() => onUse(result)}>
               Kullan
             </button>
-            <button type="button" className="secondary-button" onClick={() => setView('revise')}>
+            <button type="button" className="secondary-button" onClick={() => startEdit(result)}>
               Tekrar
             </button>
           </div>
@@ -313,8 +357,9 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
         </>
       ) : (
         <>
-          <span className="prompt-gen-label">Öneri</span>
-          <div className="prompt-gen-prev">{result}</div>
+          <span className="prompt-gen-label">{editBase === result ? 'Öneri' : 'Kutudaki prompt'}</span>
+          <div className="prompt-gen-prev">{editBase}</div>
+          <span className="field-hint">Sadece istediğin değişiklik yapılır; promptun geri kalanı kelimesi kelimesine korunur.</span>
           <label className="prompt-gen-label" htmlFor={`pg-fb-${target}`}>
             Ne değişsin?
           </label>
@@ -331,7 +376,7 @@ function PromptGenBody({ target, context, onUse, postProcess }: Props) {
             <button type="button" className="generate-button" disabled={!feedback.trim()} onClick={() => generate(true)}>
               Değiştir
             </button>
-            <button type="button" className="secondary-button" onClick={() => setView('result')}>
+            <button type="button" className="secondary-button" onClick={() => setView(result ? 'result' : 'ask')}>
               Vazgeç
             </button>
           </div>

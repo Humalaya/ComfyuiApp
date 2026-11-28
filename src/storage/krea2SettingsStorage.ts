@@ -31,6 +31,8 @@ export function normalizeKrea2Settings(
   return {
     prompt: typeof r.prompt === 'string' ? r.prompt : defaults.prompt,
     unetName: typeof r.unetName === 'string' ? r.unetName : defaults.unetName,
+    clipName: typeof r.clipName === 'string' ? r.clipName : defaults.clipName,
+    vaeName: typeof r.vaeName === 'string' ? r.vaeName : defaults.vaeName,
     seed: typeof r.seed === 'number' && Number.isFinite(r.seed) ? r.seed : defaults.seed,
     fixedSeed: typeof r.fixedSeed === 'boolean' ? r.fixedSeed : defaults.fixedSeed,
     width: typeof r.width === 'number' && Number.isFinite(r.width) ? r.width : defaults.width,

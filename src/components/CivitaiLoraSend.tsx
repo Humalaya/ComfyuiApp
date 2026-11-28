@@ -21,10 +21,9 @@ interface Props {
 }
 
 // Where a matched LoRA can go — the tab's own LoRA family (loraMeta.ts).
-const TARGETS: { kind: ImportPayload['kind']; family: LoraTab; label: string }[] = [
+const TARGETS: { kind: 'sdxl' | 'krea2' | 'video'; family: LoraTab; label: string }[] = [
   { kind: 'sdxl', family: 'sdxl', label: 'SDXL' },
   { kind: 'krea2', family: 'krea2', label: 'Krea2' },
-  { kind: 'anime2real', family: 'krea2', label: 'Edit' },
   { kind: 'video', family: 'video', label: 'Video' },
 ]
 

@@ -10,6 +10,7 @@ export interface CivitaiItem {
   createdAt: string
   baseModel: string | null
   username: string | null
+  postId: number | null
   reactions: number
   comments: number
 }
@@ -56,10 +57,12 @@ export interface CivitaiQuery {
   // overrides baseModels.
   modelVersion: { id: number; name: string } | null
   nsfwOnly: boolean // only R / X / XXX
-  // A Civitai tag — posts tagged with it (image/video), or models by its
-  // name (Modeller). Image and model tags are separate lists, so switching
-  // to/from Modeller drops it.
+  // Modeller: models with this tag name (Civitai's model search takes one).
   tag: CivitaiTag | null
+  // Görseller / Videolar: posts carrying every one of `tags`, and none of
+  // `excludedTags` (images and videos share one tag list).
+  tags: CivitaiTag[]
+  excludedTags: CivitaiTag[]
 }
 
 export interface CivitaiTag {
@@ -77,8 +80,13 @@ async function asJson<T>(res: Response): Promise<T> {
 
 // The post feed's own fields (image / video tab, a model page's images).
 export type CivitaiPostQuery = Pick<CivitaiQuery, 'sort' | 'period' | 'baseModels' | 'withMeta' | 'nsfwOnly' | 'modelVersion'> & {
-  type: 'image' | 'video'
-  tag?: CivitaiTag | null
+  // 'all': images and videos together (a user's / a post's page).
+  type: 'image' | 'video' | 'all'
+  tags?: CivitaiTag[]
+  excludedTags?: CivitaiTag[]
+  // One user's posts, or one post's pictures.
+  username?: string
+  postId?: number
 }
 
 export function fetchCivitaiPage(q: CivitaiPostQuery, cursor: string | null): Promise<CivitaiPage> {
@@ -92,7 +100,10 @@ export function fetchCivitaiPage(q: CivitaiPostQuery, cursor: string | null): Pr
   // Civitai's base model names never contain commas.
   if (q.modelVersion) params.set('modelVersionId', String(q.modelVersion.id))
   else if (q.baseModels.length > 0) params.set('baseModels', q.baseModels.join(','))
-  if (q.tag) params.set('tagId', String(q.tag.id))
+  if (q.tags?.length) params.set('tagIds', q.tags.map((t) => t.id).join(','))
+  if (q.excludedTags?.length) params.set('excludedTagIds', q.excludedTags.map((t) => t.id).join(','))
+  if (q.username) params.set('username', q.username)
+  if (q.postId) params.set('postId', String(q.postId))
   if (cursor) params.set('cursor', cursor)
   return fetch(`/api/civitai/images?${params}`).then((r) => asJson<CivitaiPage>(r))
 }
@@ -149,6 +160,43 @@ export function fetchCivitaiImageTags(id: number): Promise<CivitaiTag[]> {
     .then((d) => d.items)
 }
 
+// One post by id — an opened civitai.com/images/… link.
+export function fetchCivitaiImage(id: number): Promise<CivitaiItem> {
+  return fetch(`/api/civitai/image?id=${id}`).then((r) => asJson<CivitaiItem>(r))
+}
+
+// A pasted Civitai link → what to open in the app. Any Civitai domain
+// (civitai.com / .red / .green); null if it isn't one this app can show.
+export type CivitaiLink =
+  | { kind: 'image'; id: number }
+  | { kind: 'post'; id: number }
+  | { kind: 'model'; modelId: number; versionId?: number }
+  | { kind: 'user'; username: string }
+
+export function parseCivitaiLink(text: string): CivitaiLink | null {
+  const raw = text.trim().match(/\S*civitai\.[a-z]+\S*/i)?.[0]
+  if (!raw) return null
+  let url: URL
+  try {
+    url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
+  } catch {
+    return null
+  }
+  if (!/(^|\.)civitai\.[a-z]+$/i.test(url.hostname)) return null
+  const parts = url.pathname.split('/').filter(Boolean)
+  const num = (v: string | undefined | null) => (v && /^\d+$/.test(v) ? Number(v) : null)
+  const [section, value] = parts
+  if (section === 'images' && num(value)) return { kind: 'image', id: num(value)! }
+  if (section === 'posts' && num(value)) return { kind: 'post', id: num(value)! }
+  if (section === 'models' && num(value)) {
+    const versionId = num(url.searchParams.get('modelVersionId'))
+    return versionId ? { kind: 'model', modelId: num(value)!, versionId } : { kind: 'model', modelId: num(value)! }
+  }
+  if (section === 'user' && value && /^[\w.-]{1,64}$/.test(decodeURIComponent(value)))
+    return { kind: 'user', username: decodeURIComponent(value) }
+  return null
+}
+
 export function fetchCivitaiGeneration(id: number): Promise<CivitaiGeneration> {
   return fetch(`/api/civitai/generation?id=${id}`).then((r) => asJson<CivitaiGeneration>(r))
 }
@@ -177,7 +225,7 @@ export interface InputImageRef {
 
 // Has the PC download this image from Civitai and put it into ComfyUI's
 // input folder (server/index.js /api/civitai/to-input) — the result is
-// usable as the video tab's first frame or Anime2Real's input. Images only:
+// usable as the video tab's first frame or Edit (Qwen)'s picture 1. Images only:
 // Civitai's CDN won't hand out a still of a video, only the whole file.
 export async function sendCivitaiImageToInput(item: CivitaiItem): Promise<InputImageRef> {
   const res = await fetch('/api/civitai/to-input', {

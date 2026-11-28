@@ -19,7 +19,7 @@
 // makes a prompt slower, not better.
 import crypto from 'node:crypto'
 
-import { buildPromptGenMessages, maxTokensFor } from './promptGenRules.js'
+import { buildPromptGenMessages, EDIT_TEMPERATURE, maxTokensFor } from './promptGenRules.js'
 
 const PROMPT_MODEL = process.env.PROMPT_LLM_MODEL || 'qwen-prompt'
 // Already loaded instead (same GPU group): use it rather than evicting it.
@@ -39,6 +39,9 @@ function cleanOutput(text) {
   t = t.replace(/^\s*EN:[^\n]*\n+/, '').trim()
   t = t.replace(/^(prompt|positive prompt|output)\s*:\s*/i, '').trim()
   if (/^".*"$/s.test(t)) t = t.slice(1, -1).trim()
+  // Edit mode quotes the current prompt between <<< >>>; a model may echo them.
+  const quoted = t.match(/^<<<\s*\n?([\s\S]*?)\n?\s*>>>$/)
+  if (quoted) t = quoted[1].trim()
   return t
 }
 
@@ -114,8 +117,10 @@ export function registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFe
             body: JSON.stringify({
               model,
               messages: job.messages,
-              max_tokens: maxTokensFor(job.target, job.length, model !== PROMPT_MODEL),
-              temperature: 0.7,
+              max_tokens: job.edit
+                ? job.maxTokens + (model !== PROMPT_MODEL ? 5000 : 0)
+                : maxTokensFor(job.target, job.length, model !== PROMPT_MODEL),
+              temperature: job.edit ? EDIT_TEMPERATURE : 0.7,
             }),
           },
           10 * 60 * 1000,
@@ -153,22 +158,24 @@ export function registerPromptGenRoutes(app, { HttpError, sendError, llamaSwapFe
     }
   }
 
-  const publicJob = ({ messages: _m, canceled: _c, ...j }) => j
+  const publicJob = ({ messages: _m, canceled: _c, maxTokens: _t, ...j }) => j
 
   // { target, system, request, context?, length?, previous?, feedback? } —
-  // see promptGenRules.js; `previous` + `feedback` make it a revision of the
-  // last answer.
+  // see promptGenRules.js; `previous` + `feedback` make it an edit of that
+  // prompt (request not needed).
   app.post('/api/promptgen', (req, res) => {
     try {
       if (current && current.status === 'running') throw new HttpError(409, 'Zaten bir prompt üretiliyor.')
       const built = buildPromptGenMessages(req.body ?? {})
       if (built.error) throw new HttpError(400, built.error)
-      const { messages, length } = built
+      const { messages, length, edit, maxTokens } = built
       const { target } = req.body
       current = {
         id: crypto.randomUUID(),
         target,
         length,
+        edit,
+        maxTokens,
         status: 'running',
         stage: 'waiting',
         result: null,

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { mergeLoras, type LoraAdd } from '../workflow/loraMerge'
 import { NumberField } from './NumberField'
+import { ModelSelect } from './ModelSelect'
+import { archLabel, useTextEncoderArchs } from '../api/textEncoderClient'
 import { LoraList } from './LoraList'
 import { GenerationPreview } from './GenerationPreview'
 import { ResultCarousel } from './ResultCarousel'
@@ -64,6 +66,11 @@ export function Krea2GenerateTab({ importRequest }: Props) {
   // newer item the moment that happened.
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const objectInfo = useObjectInfo()
+  const encoderArchs = useTextEncoderArchs(objectInfo.imageClipNames.join('|'))
+  // The text encoder must be Qwen3-VL 4B — another one loads but fails at sampling.
+  const encoderNote = (name: string) =>
+    !encoderArchs[name] ? '' : encoderArchs[name] === 'qwen3vl_4b' ? '✓ uyumlu' : `✗ Krea2 ile uyumsuz (${archLabel(encoderArchs[name])})`
+  const encoderWrong = !!encoderArchs[settings.clipName] && encoderArchs[settings.clipName] !== 'qwen3vl_4b'
   const gen = useImageGeneration(KREA2_OUTPUT_NODE_ID, KIND)
 
   useEffect(() => {
@@ -155,13 +162,20 @@ export function Krea2GenerateTab({ importRequest }: Props) {
   return (
     <div className="form">
       {/* At the top: reachable without scrolling past the whole form. */}
-      <button type="button" className="generate-button" disabled={!canGenerate || submitting} onClick={handleGenerate}>
+      <button type="button" className="generate-button" disabled={!canGenerate || submitting || encoderWrong} onClick={handleGenerate}>
         {isBusy
           ? '+ Kuyruğa Ekle'
           : settings.batchSize * settings.batchCount > 1
             ? `Oluştur · ${settings.batchSize * settings.batchCount}`
             : 'Oluştur'}
       </button>
+
+      {encoderWrong && (
+        <div className="status-warning">
+          ⚠ Seçili metin kodlayıcı {archLabel(encoderArchs[settings.clipName])} — Krea2 yalnızca Qwen3-VL 4B ile çalışır (başka bir
+          kodlayıcı yüklenir ama örneklemede hata verir). Gelişmiş Ayarlar → Metin kodlayıcı'dan "✓ uyumlu" olanı seç.
+        </div>
+      )}
 
       {/* Output first, form fields below — so the current job's progress or
           result is visible the moment this tab opens, without scrolling past
@@ -338,7 +352,45 @@ export function Krea2GenerateTab({ importRequest }: Props) {
         onSendToPrompt={(words) => update('prompt', appendTriggerWords(settings.prompt, words))}
       />
 
+      {!objectInfo.loading &&
+        !objectInfo.error &&
+        (!objectInfo.imageClipNames.includes(settings.clipName) || !objectInfo.imageVaeNames.includes(settings.vaeName)) && (
+          <div className="status-warning">
+            ⚠ Seçili {!objectInfo.imageClipNames.includes(settings.clipName) ? 'metin kodlayıcı' : 'VAE'} ComfyUI'de yok — Gelişmiş
+            Ayarlar'dan var olan birini seç.
+          </div>
+        )}
+
       <CollapsibleSection title="Gelişmiş Ayarlar">
+        <div className="field">
+          <label className="field-label" htmlFor="krea2-clip">
+            Metin kodlayıcı
+            <HelpTip>
+              text_encoders/image klasöründeki dosyalar. Krea2 Qwen3-VL 4B ile eğitildi; farklı boyutta bir kodlayıcı hata verebilir.
+            </HelpTip>
+          </label>
+          <ModelSelect
+            id="krea2-clip"
+            value={settings.clipName}
+            note={encoderNote}
+            names={objectInfo.imageClipNames}
+            loading={objectInfo.loading}
+            onChange={(v) => update('clipName', v)}
+          />
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="krea2-vae">
+            VAE
+            <HelpTip>vae/image klasöründeki dosyalar.</HelpTip>
+          </label>
+          <ModelSelect
+            id="krea2-vae"
+            value={settings.vaeName}
+            names={objectInfo.imageVaeNames}
+            loading={objectInfo.loading}
+            onChange={(v) => update('vaeName', v)}
+          />
+        </div>
         <div className="field-row">
           <div className="field">
             <label className="field-label" htmlFor="krea2-sampler-1">

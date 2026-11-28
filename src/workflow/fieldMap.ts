@@ -86,6 +86,9 @@ export interface GenerationSettings {
   // (fast); 'max' keeps a 2048px short edge — best identity, several times
   // slower (reference tokens ride through every sampling step).
   refImageSize: 'match' | 'max'
+  // REF2VA's references 3 and 4 (Picture 1 / 2 above are references 1 and
+  // 2 in that mode) — each with its own on/off switch, like those two.
+  extraRefs: { image: { filename: string; subfolder: string; type: string } | null; on: boolean }[]
   loras: LoraSlot[]
   // UI-only, like fixedSeed — this workflow's MiniMaxH3ImageToVideo node has
   // no batch_size input at all (checked via ComfyUI's own /object_info), so
@@ -97,6 +100,22 @@ export interface GenerationSettings {
 }
 
 export const LORA_SLOT_COUNT = 10
+
+// LoadImageCrop nodes added for REF2VA references 3 and 4 (not in the
+// template — created only when used, same settings as the last-frame one).
+export const EXTRA_REF_NODE_IDS = ['901', '902'] as const
+
+// REF2VA's active references in order — <Picture 1>… in the prompt; one
+// that's off closes the gap. Loader node id + picked image.
+export function referenceImages(settings: GenerationSettings): { node: string; image: { filename: string; subfolder: string } }[] {
+  const out: { node: string; image: { filename: string; subfolder: string } }[] = []
+  if (settings.inputImageEnabled && settings.inputImage) out.push({ node: NODE_IDS.inputImage, image: settings.inputImage })
+  if (settings.lastFrameEnabled && settings.lastFrameImage) out.push({ node: NODE_IDS.lastFrameImage, image: settings.lastFrameImage })
+  settings.extraRefs.forEach((r, i) => {
+    if (r.on && r.image) out.push({ node: EXTRA_REF_NODE_IDS[i], image: r.image })
+  })
+  return out
+}
 
 function readLoraSlots(): LoraSlot[] {
   const raw = (templateJson as unknown as ComfyWorkflow)[NODE_IDS.loraLoader].inputs
@@ -131,6 +150,7 @@ export function getDefaultSettings(): GenerationSettings {
     lastFrameEnabled: false,
     videoMode: 'frames',
     refImageSize: 'match',
+    extraRefs: EXTRA_REF_NODE_IDS.map(() => ({ image: null, on: false })),
     loras: readLoraSlots(),
     batchCount: 1,
   }
@@ -204,12 +224,16 @@ function wireReferenceNode(workflow: ComfyWorkflow, settings: GenerationSettings
     length: [NODE_IDS.length, 1],
     ref_image_size: settings.refImageSize,
   }
-  const refs = [
-    settings.inputImageEnabled && settings.inputImage ? NODE_IDS.inputImage : null,
-    settings.lastFrameEnabled && settings.lastFrameImage ? NODE_IDS.lastFrameImage : null,
-  ].filter((id): id is NonNullable<typeof id> => id !== null)
-  refs.forEach((id, i) => {
-    inputs[`ref_images.ref_image_${i}`] = [id, 0]
+  referenceImages(settings).forEach(({ node, image }, i) => {
+    if (!workflow[node]) {
+      workflow[node] = {
+        class_type: 'LoadImageCrop',
+        inputs: { ...workflow[NODE_IDS.lastFrameImage].inputs },
+        _meta: { title: `Load Image & Crop (Reference ${i + 1})` },
+      }
+    }
+    workflow[node].inputs.image = image.subfolder ? `${image.subfolder}/${image.filename}` : image.filename
+    inputs[`ref_images.ref_image_${i}`] = [node, 0]
   })
   workflow[NODE_IDS.referenceToVideo] = {
     class_type: 'MiniMaxH3ReferenceToVideo',

@@ -392,6 +392,15 @@ input[type='range'] {
   min-width: 0;
 }
 
+/* Edit (Qwen)'s three references: two per row on a phone. */
+.picture-frame-row-wrap {
+  flex-wrap: wrap;
+}
+
+.picture-frame-row-wrap > .field {
+  flex: 1 1 calc(50% - 5px);
+}
+
 .picture-frame-header {
   display: flex;
   align-items: center;
@@ -3744,4 +3753,117 @@ button:disabled,
 
 .civitai-lora-send-missing .civitai-lora-send-status {
   color: var(--text-dim);
+}
+
+/* ✨ Prompt: edit the prompt already in the box; words an edit dropped. */
+.prompt-gen-edit-box {
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.prompt-gen-dropped {
+  color: var(--warning, #e0a030);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+
+/* Civitai: the 🔗 link button beside the Görseller/Videolar/Modeller switch. */
+.civitai-top-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.civitai-top-row > .seg {
+  flex: 1;
+  min-width: 0;
+}
+
+.civitai-link-dialog input {
+  width: 100%;
+}
+
+/* The poster's name in the viewer — opens their posts. */
+.civitai-viewer-user-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* Tag picker: excluded tags, stars, the tap-mode switch, Uygula. */
+.chip-exclude {
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.civitai-tag-star {
+  color: #f5c518;
+  margin-right: 3px;
+}
+
+.civitai-tag-mode {
+  margin-top: 2px;
+}
+
+.civitai-tag-apply {
+  position: sticky;
+  bottom: 0;
+}
+
+/* Edit's 2×2 pictures: an off reference keeps a dimmed box; headers with
+   and without a switch line up. */
+.image-uploader-off {
+  width: 100%;
+  opacity: 0.45;
+  padding: 8px;
+  text-align: center;
+  color: inherit;
+  font: inherit;
+}
+
+.image-uploader-off .image-placeholder {
+  font-size: 0.85rem;
+}
+
+.picture-frame-row-wrap .picture-frame-header {
+  min-height: 32px;
+}
+
+.picture-frame-row-wrap {
+  align-items: flex-start;
+}
+
+.picture-frame-row-wrap .image-placeholder {
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* A user's / post's page: its two switches stack on a phone instead of
+   pushing the page wider than the screen. */
+.civitai-posts-page {
+  overflow-x: hidden;
+}
+
+.civitai-posts-page .civitai-toolbar {
+  flex-wrap: wrap;
+}
+
+.civitai-posts-page .civitai-toolbar .seg {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.civitai-posts-page .civitai-model-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

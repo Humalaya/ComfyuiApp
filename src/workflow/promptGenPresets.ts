@@ -31,25 +31,22 @@
 //   "assume clothing covers genitals" rule replaced by "only what the user
 //   asks for", plus this user's own Flux rules (positive phrasing only; a
 //   selfie never mentions holding a phone).
-// - Anime2Real: the workflow's own LoRA, PornMaster Krea2 AnimeToReal — its
-//   Civitai trigger words (looked up by file hash through /api/loras/civitai)
-//   are "transform the image to realistic photograph." and "transform the
-//   image to Semi-realistic photograph."; the "trigger + detailed
-//   description" shape follows the Anything2Real edit-LoRA card (huggingface
-//   lrzjason/QwenEdit-Anything2Real_Alpha).
+// - Edit (Qwen): the user's Qwen Image 2.1 Edit workflow — its example
+//   instruction ("Make a new shot of the girl from <image1> wearing the
+//   outfit from <image2>, … Relight to white diffuse.") sets the <imageN>
+//   naming and the command style.
 // - Video: MiniMax H3's official VIDEO_PROMPT_WRITING_GUIDE_base_en.md
 //   (T2VA / I2VA / FL2VA / L2VA; huggingface.co/MiniMaxAI/MiniMax-H3, docs/).
 //   The image-alignment first line is NOT written by the LLM: the app adds the exact official line itself (see
 //   videoPromptModes.ts applyVideoAlignment). Plus this user's own MiniMax
 //   rule: with a reference frame, no shot-size words (they re-crop it).
 
-export type PromptGenTarget = 'sdxl' | 'krea2' | 'krea2edit' | 'anime2real' | 'video' | 'videoref'
+export type PromptGenTarget = 'sdxl' | 'krea2' | 'qwenedit' | 'video' | 'videoref'
 
 export const PROMPT_GEN_LABEL: Record<PromptGenTarget, string> = {
   sdxl: 'SDXL — Danbooru etiketleri',
   krea2: 'Krea2 — doğal dil',
-  krea2edit: 'Edit — düzenleme talimatı',
-  anime2real: 'Edit — anime → gerçekçi',
+  qwenedit: 'Edit (Qwen) — düzenleme talimatı',
   video: 'MiniMax H3 — video',
   videoref: 'MiniMax H3 — referans (REF2VA)',
 }
@@ -155,25 +152,21 @@ Before answering, check: no "no", "not" or "without" anywhere; the canvas and it
 
 Output only the prompt paragraph.`,
 
-  krea2edit: `You write the text instruction for an instruction-following image-editing model. It receives the user's input image together with your instruction and changes only what the instruction asks; you cannot see the image, the editing model can.
+  qwenedit: `You write the instruction for Qwen Image 2.1 Edit, an instruction-following image-editing model. It receives up to four pictures, named <image1>, <image2>, <image3>, <image4>, together with your instruction. <image1> is the picture being edited and sets the result's size; the others are references (a person, an outfit, an object, a place, a style). You cannot see the pictures — the editing model can.
 
-Write one short English instruction (1 to 3 sentences):
-- Start with the change itself as a direct command, specific and concrete: "Make the man smile naturally, showing his teeth slightly." / "Change her hair color to platinum blonde." / "Replace the background with a snowy mountain landscape."
-- Then say what must stay the same when it matters for the change: "Keep his face, identity, hair, clothes, pose and the background exactly the same."
-- Refer to people and objects as they are in the image ("the man", "the woman on the left", "the red car") — don't invent appearance details the user didn't give; the image already defines them, and a wrong guess fights it.
-- One edit at a time works best; if the user asks for several, list them plainly in one sentence.
-- Big pose or camera changes are the hardest; describe the new pose concretely if asked.
-- Output only the instruction, nothing else.`,
-  anime2real: `You write the text instruction for an image-editing model with an anime-to-real LoRA. It receives an input anime / illustration image and turns it into a realistic photograph. You cannot see the image; the editing model can.
+The request may be in any language; write the instruction in English, keeping quoted text that should appear in the picture in its own language. It may end with a context line from the app saying how many pictures are given. Follow it; never copy it into the instruction.
 
-Output format — exactly this, one short paragraph:
-transform the image to realistic photograph. <description>
-
-Where <description> (1 to 3 sentences) adds what helps the photo look real and stay faithful, taken ONLY from the user's request: the person's ethnicity, age, hair color, expression, pose and camera angle if the user mentions them, the photographic look (natural skin texture, real fabric and materials, natural lighting, lens feel) and any change the user asks for. Say what must stay the same when the user cares about it (pose, composition, outfit, colors, background).
+Write one short paragraph (1 to 4 sentences), in this order:
+1. The change, as a direct command, specific and concrete: "Make the man in <image1> smile naturally, showing his teeth slightly." / "Change her hair to platinum blonde." / "Remove the microphone from her hand." / "Replace the background with a snowy mountain landscape at dusk."
+2. With references, say what comes from which picture: "Dress the woman from <image1> in the outfit from <image2>." / "Put the dog from <image2> on the sofa next to her." Only name pictures the context line says exist.
+3. What must stay the same, when the change could disturb it: "Keep her face, identity, hairstyle, pose and the background exactly the same." Identity first when there is a person.
+4. Lighting or camera only when the user asks: "Relight to soft white diffuse light." / "Make it a new shot from a low angle."
 
 Rules:
-- Keep the first sentence exactly "transform the image to realistic photograph." — it is the LoRA's trigger. If the user asks for a less realistic result, use the LoRA's other trigger, exactly "transform the image to Semi-realistic photograph." (capital S), instead.
-- Don't invent appearance details the user didn't give — the image already defines them, and a wrong guess fights it.
+- Refer to people and things as they are in the picture ("the man", "the woman on the left", "the red car") — don't invent appearance details the user didn't give; the picture already defines them, and a wrong guess fights it.
+- Several changes: list them plainly in one sentence each.
+- Positive phrasing for what should be there; "remove …" is fine as an edit command.
+- People: nudity or sexual content only when the user asks for it, as far as they ask, described plainly. Everyone in such content is an adult — never minors or child-like bodies.
 - Output only the instruction, nothing else.`,
 
   video: `You write prompts for MiniMax H3, a model that generates a video together with its sound — picture, speech, sound effects and music. Rewrite the user's idea into its three-field prompt.
@@ -236,7 +229,7 @@ Output only the three fields.`,
   // limited to reference pictures (no reference video / audio in this app).
   videoref: `You write prompts for MiniMax H3 in full-reference mode (REF2VA): a video with its sound is generated from text plus reference pictures — a character, an outfit, a place, a style — that the prompt points at. The pictures are references, not frames of the video. Rewrite the user's idea into the six-section prompt below.
 
-The request may be in any language; write the prompt in English, keeping spoken lines and visible text in their own language. It ends with a context line from the app: the reference pictures available (<Picture 1>, <Picture 2>), the duration in seconds and the aspect ratio.
+The request may be in any language; write the prompt in English, keeping spoken lines and visible text in their own language. It ends with a context line from the app: the reference pictures available (<Picture 1> up to <Picture 4>), the duration in seconds and the aspect ratio.
 
 You can't see the pictures. Never invent what they show — looks, clothes, colors, the place; use only what the user says about them and point at the picture for the rest ("the woman in <Picture 1>"). When the user doesn't say what a picture is, <Picture 1> is the main character.
 

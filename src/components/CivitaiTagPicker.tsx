@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchCivitaiTags, type CivitaiTag, type CivitaiTagItem } from '../api/civitaiBrowser'
 import { useBackHandler } from '../native/backButton'
-import { loadRecentCivitaiTags as loadRecent, rememberCivitaiTag, recentCivitaiTagsKey as recentKey } from './civitaiShared'
+import { loadStarredCivitaiTags, toggleStarredCivitaiTag } from './civitaiShared'
 
 interface Props {
   // 'image' covers videos too — Civitai tags both with the same list.
   kind: 'image' | 'model'
-  current: CivitaiTag | null
-  onPick: (tag: CivitaiTag | null) => void
+  // Posts take several tags (all must match) and excluded ones; Civitai's
+  // model search takes a single tag — then a tap just picks it.
+  multi: boolean
+  included: CivitaiTag[]
+  excluded: CivitaiTag[]
+  onApply: (included: CivitaiTag[], excluded: CivitaiTag[]) => void
   onClose: () => void
 }
 
 type TagSort = 'civitai' | 'popular' | 'az'
+// What tapping a tag does.
+type TapMode = 'include' | 'exclude' | 'star'
 
 const SORT_KEY = 'civitai-tag-sort'
 
@@ -22,16 +28,24 @@ function sortTags<T extends CivitaiTag & { rank?: number | null }>(tags: T[], so
   return tags
 }
 
-// Pick a Civitai tag to filter the feed by: the site's categories, any tag
-// by search, or one used before.
-export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
+const has = (list: CivitaiTag[], t: CivitaiTag) => list.some((x) => x.name === t.name)
+const without = (list: CivitaiTag[], t: CivitaiTag) => list.filter((x) => x.name !== t.name)
+const plain = (t: CivitaiTag): CivitaiTag => ({ id: t.id, name: t.name })
+
+// Pick Civitai tags to filter the feed by: the site's categories, any tag by
+// search, or a starred one. In multi mode tags are gathered (+ include,
+// − exclude) and applied together; ★ mode stars / unstars instead.
+export function CivitaiTagPicker({ kind, multi, included: initialIncluded, excluded: initialExcluded, onApply, onClose }: Props) {
   useBackHandler(true, onClose)
   const [categories, setCategories] = useState<CivitaiTagItem[] | null>(null)
   const [input, setInput] = useState('')
   const [results, setResults] = useState<CivitaiTagItem[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [recent, setRecent] = useState(() => loadRecent(kind))
+  const [starred, setStarred] = useState(() => loadStarredCivitaiTags(kind))
+  const [included, setIncluded] = useState(initialIncluded)
+  const [excluded, setExcluded] = useState(initialExcluded)
+  const [mode, setMode] = useState<TapMode>('include')
   const [sort, setSort] = useState<TagSort>(() => {
     try {
       const v = localStorage.getItem(SORT_KEY)
@@ -76,25 +90,45 @@ export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
     }
   }
 
-  function pick(tag: CivitaiTag) {
-    rememberCivitaiTag(kind, { id: tag.id, name: tag.name })
-    onPick({ id: tag.id, name: tag.name })
+  function tap(t: CivitaiTag) {
+    const tag = plain(t)
+    if (mode === 'star') {
+      setStarred(toggleStarredCivitaiTag(kind, tag))
+      return
+    }
+    if (!multi) {
+      onApply([tag], [])
+      return
+    }
+    // Tapping a tag already in that list takes it out again; a tag is
+    // never both included and excluded.
+    if (mode === 'include') {
+      setIncluded((l) => (has(l, tag) ? without(l, tag) : [...l, tag]))
+      setExcluded((l) => without(l, tag))
+    } else {
+      setExcluded((l) => (has(l, tag) ? without(l, tag) : [...l, tag]))
+      setIncluded((l) => without(l, tag))
+    }
   }
 
   const sortedCategories = useMemo(() => (categories ? sortTags(categories, sort) : null), [categories, sort])
   const sortedResults = useMemo(() => (results ? sortTags(results, sort) : null), [results, sort])
+  const changed =
+    included.map((t) => t.name).join('|') !== initialIncluded.map((t) => t.name).join('|') ||
+    excluded.map((t) => t.name).join('|') !== initialExcluded.map((t) => t.name).join('|')
 
-  const tagButton = (t: CivitaiTag & { isCategory?: boolean }) => (
-    <button
-      key={t.name}
-      type="button"
-      className={current?.name === t.name ? 'chip chip-active' : t.isCategory && results ? 'chip civitai-tag-category' : 'chip'}
-      aria-pressed={current?.name === t.name}
-      onClick={() => pick(t)}
-    >
-      {t.name}
-    </button>
-  )
+  const tagButton = (t: CivitaiTag & { isCategory?: boolean }) => {
+    const inc = has(included, t)
+    const exc = has(excluded, t)
+    const star = has(starred, t)
+    const cls = inc ? 'chip chip-active' : exc ? 'chip chip-exclude' : t.isCategory && results ? 'chip civitai-tag-category' : 'chip'
+    return (
+      <button key={t.name} type="button" className={cls} aria-pressed={inc || exc} onClick={() => tap(t)}>
+        {star && <span className="civitai-tag-star">★</span>}
+        {exc ? `− ${t.name}` : t.name}
+      </button>
+    )
+  }
 
   return (
     <div className="popup-overlay prompt-gen-overlay" onClick={onClose}>
@@ -123,6 +157,53 @@ export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
           )}
         </div>
 
+        <div className="seg civitai-tag-mode" role="group" aria-label="Dokununca">
+          <button type="button" className={mode === 'include' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setMode('include')}>
+            {multi ? '+ Ekle' : 'Seç'}
+          </button>
+          {multi && (
+            <button type="button" className={mode === 'exclude' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setMode('exclude')}>
+              − Hariç tut
+            </button>
+          )}
+          <button type="button" className={mode === 'star' ? 'seg-btn seg-btn-active' : 'seg-btn'} onClick={() => setMode('star')}>
+            ★ Yıldızla
+          </button>
+        </div>
+        {mode === 'star' && (
+          <span className="field-hint">Dokunduğun etiket yıldızlanır / yıldızı kalkar. Yıldızlılar akışın üstünde durur.</span>
+        )}
+
+        {multi && (included.length > 0 || excluded.length > 0) && (
+          <section className="civitai-tag-section">
+            <div className="civitai-tag-section-head">
+              <span className="prompt-gen-label">Seçili — hepsi olan postlar, hariçler olmadan</span>
+              <button
+                type="button"
+                className="prompt-gen-link"
+                onClick={() => {
+                  setIncluded([])
+                  setExcluded([])
+                }}
+              >
+                Temizle
+              </button>
+            </div>
+            <div className="civitai-tag-cloud">
+              {included.map((t) => (
+                <button key={`+${t.name}`} type="button" className="chip chip-active" onClick={() => setIncluded((l) => without(l, t))}>
+                  {t.name} ✕
+                </button>
+              ))}
+              {excluded.map((t) => (
+                <button key={`-${t.name}`} type="button" className="chip chip-exclude" onClick={() => setExcluded((l) => without(l, t))}>
+                  − {t.name} ✕
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         <div className="civitai-tag-toolbar">
           <span className="prompt-gen-label">Sırala</span>
           <div className="seg">
@@ -144,8 +225,8 @@ export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
               A–Z
             </button>
           </div>
-          {current && (
-            <button type="button" className="prompt-gen-link civitai-tag-clear" onClick={() => onPick(null)}>
+          {!multi && initialIncluded.length > 0 && (
+            <button type="button" className="prompt-gen-link civitai-tag-clear" onClick={() => onApply([], [])}>
               Filtreyi kaldır
             </button>
           )}
@@ -166,26 +247,10 @@ export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
           </section>
         ) : (
           <>
-            {recent.length > 0 && (
+            {starred.length > 0 && (
               <section className="civitai-tag-section">
-                <div className="civitai-tag-section-head">
-                  <span className="prompt-gen-label">Son kullanılanlar</span>
-                  <button
-                    type="button"
-                    className="prompt-gen-link"
-                    onClick={() => {
-                      try {
-                        localStorage.removeItem(recentKey(kind))
-                      } catch {
-                        // nothing to clear
-                      }
-                      setRecent([])
-                    }}
-                  >
-                    Temizle
-                  </button>
-                </div>
-                <div className="civitai-tag-cloud">{sortTags(recent, sort).map(tagButton)}</div>
+                <span className="prompt-gen-label">★ Yıldızlı</span>
+                <div className="civitai-tag-cloud">{sortTags(starred, sort).map(tagButton)}</div>
               </section>
             )}
             <section className="civitai-tag-section">
@@ -198,73 +263,97 @@ export function CivitaiTagPicker({ kind, current, onPick, onClose }: Props) {
             </section>
           </>
         )}
+
+        {multi && (
+          <button
+            type="button"
+            className="generate-button civitai-tag-apply"
+            disabled={!changed}
+            onClick={() => onApply(included, excluded)}
+          >
+            Uygula
+            {included.length + excluded.length > 0
+              ? ` · ${included.length} etiket${excluded.length ? `, ${excluded.length} hariç` : ''}`
+              : ''}
+          </button>
+        )}
       </div>
     </div>
   )
 }
 
-// The feed's tag row: with no tag, a "🏷 Etiket" chip (opens the picker)
-// followed by recently used tags for one-tap reuse; with one, a filter bar
-// showing it, tap to change, ✕ to drop.
+// The feed's tag row: "🏷 Etiket" (opens the picker), the active filter
+// (tap a chip to drop it), then starred tags not in use for one-tap adding.
+// Recently used tags are no longer listed — only starred ones.
 export function CivitaiTagBar({
   kind,
-  tag,
+  multi,
+  included,
+  excluded,
   onChange,
 }: {
   kind: 'image' | 'model'
-  tag: CivitaiTag | null
-  onChange: (tag: CivitaiTag | null) => void
+  multi: boolean
+  included: CivitaiTag[]
+  excluded: CivitaiTag[]
+  onChange: (included: CivitaiTag[], excluded: CivitaiTag[]) => void
 }) {
   const [open, setOpen] = useState(false)
-  // Read each render (a tiny localStorage read): picks from the picker or a
-  // post's tags add to it.
-  const recent = open ? [] : loadRecent(kind)
+  // Read each render (a tiny localStorage read): starring in the picker
+  // shows up here once it closes.
+  const starred = open ? [] : loadStarredCivitaiTags(kind).filter((t) => !has(included, t) && !has(excluded, t))
+  const active = included.length + excluded.length > 0
 
   return (
     <>
-      {tag ? (
-        <div className="civitai-model-filter">
-          <span className="civitai-model-filter-label">Etiket</span>
+      <div className="chip-row">
+        <button type="button" className="chip civitai-tag-open" onClick={() => setOpen(true)}>
+          🏷 {active ? 'Düzenle' : 'Etiket'}
+        </button>
+        {included.map((t) => (
           <button
+            key={`+${t.name}`}
             type="button"
-            className="civitai-model-filter-name civitai-tag-filter-name"
-            onClick={() => setOpen(true)}
-            aria-label={`Etiket: ${tag.name} — değiştir`}
+            className="chip chip-active"
+            aria-label={`${t.name} etiketini kaldır`}
+            onClick={() => onChange(without(included, t), excluded)}
           >
-            {tag.name}
+            {t.name} ✕
           </button>
-          <button type="button" className="icon-button" onClick={() => onChange(null)} aria-label="Etiket filtresini kaldır">
-            ✕
+        ))}
+        {excluded.map((t) => (
+          <button
+            key={`-${t.name}`}
+            type="button"
+            className="chip chip-exclude"
+            aria-label={`${t.name} hariç tutmayı kaldır`}
+            onClick={() => onChange(included, without(excluded, t))}
+          >
+            − {t.name} ✕
           </button>
-        </div>
-      ) : (
-        <div className="chip-row">
-          <button type="button" className="chip civitai-tag-open" onClick={() => setOpen(true)}>
-            🏷 Etiket
+        ))}
+        {starred.map((t) => (
+          <button
+            key={t.name}
+            type="button"
+            className="chip"
+            onClick={() => onChange(multi ? [...included, plain(t)] : [plain(t)], excluded)}
+          >
+            <span className="civitai-tag-star">★</span>
+            {t.name}
           </button>
-          {recent.map((t) => (
-            <button
-              key={t.name}
-              type="button"
-              className="chip"
-              onClick={() => {
-                rememberCivitaiTag(kind, t)
-                onChange(t)
-              }}
-            >
-              {t.name}
-            </button>
-          ))}
-        </div>
-      )}
+        ))}
+      </div>
       {open && (
         <CivitaiTagPicker
           kind={kind}
-          current={tag}
+          multi={multi}
+          included={included}
+          excluded={excluded}
           onClose={() => setOpen(false)}
-          onPick={(t) => {
+          onApply={(inc, exc) => {
             setOpen(false)
-            onChange(t)
+            onChange(inc, exc)
           }}
         />
       )}

@@ -11,8 +11,8 @@ interface Props {
   onSendImageOnly?: () => void
   sendingImage?: boolean
   // Use this PNG as the Edit (Flux) tab's input picture.
-  onSendToAnime2Real?: () => void
-  sendingAnime2Real?: boolean
+  onSendToEdit?: () => void
+  sendingEdit?: boolean
 }
 
 // Shows the extracted PNG metadata directly — no download of the image
@@ -35,13 +35,13 @@ export function MetadataModal({
   sendingSettings,
   onSendImageOnly,
   sendingImage,
-  onSendToAnime2Real,
-  sendingAnime2Real,
+  onSendToEdit,
+  sendingEdit,
 }: Props) {
   useBackHandler(text !== null, onClose)
   if (text === null) return null
 
-  const busy = !!sendingSettings || !!sendingImage || !!sendingAnime2Real
+  const busy = !!sendingSettings || !!sendingImage || !!sendingEdit
 
   async function handleShare() {
     await shareText(title ?? 'Metadata', text!)
@@ -77,9 +77,9 @@ export function MetadataModal({
               {sendingImage ? 'Gönderiliyor…' : '🖼️ Sadece Resmi Gönder'}
             </button>
           )}
-          {onSendToAnime2Real && (
-            <button type="button" className="secondary-button metadata-send-button" onClick={onSendToAnime2Real} disabled={busy}>
-              {sendingAnime2Real ? 'Gönderiliyor…' : "✏️ Edit'e Gönder"}
+          {onSendToEdit && (
+            <button type="button" className="secondary-button metadata-send-button" onClick={onSendToEdit} disabled={busy}>
+              {sendingEdit ? 'Gönderiliyor…' : "✏️ Edit'e Gönder"}
             </button>
           )}
         </div>

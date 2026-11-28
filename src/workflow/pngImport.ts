@@ -27,13 +27,13 @@ export async function extractPromptFromPng(file: Blob): Promise<ComfyWorkflow> {
   const raw = chunks.prompt
   if (!raw) {
     throw new Error(
-      'Bu PNG içinde ComfyUI workflow metadata\'sı (prompt bilgisi) bulunamadı. Görsel ComfyUI dışında oluşturulmuş ya da metadata kaydı kapalıyken üretilmiş olabilir.',
+      "Bu PNG içinde ComfyUI workflow metadata'sı (prompt bilgisi) bulunamadı. Görsel ComfyUI dışında oluşturulmuş ya da metadata kaydı kapalıyken üretilmiş olabilir.",
     )
   }
   try {
     return parseComfyWorkflowJson(raw) as ComfyWorkflow
   } catch {
-    throw new Error('PNG içindeki workflow metadata\'sı okunamadı (bozuk JSON).')
+    throw new Error("PNG içindeki workflow metadata'sı okunamadı (bozuk JSON).")
   }
 }
 
@@ -112,7 +112,9 @@ export function extractSettingsFromPrompt(prompt: ComfyWorkflow): PngImportResul
     const loras: LoraSlot[] = []
     for (let i = 1; i <= LORA_SLOT_COUNT; i++) {
       const slot = loraNode.inputs[`lora_${i}`] as LoraSlot | undefined
-      loras.push(slot ? { on: !!slot.on, lora: String(slot.lora ?? ''), strength: num(slot.strength, 1) } : { on: false, lora: '', strength: 1 })
+      loras.push(
+        slot ? { on: !!slot.on, lora: String(slot.lora ?? ''), strength: num(slot.strength, 1) } : { on: false, lora: '', strength: 1 },
+      )
     }
     settings.loras = loras
   }

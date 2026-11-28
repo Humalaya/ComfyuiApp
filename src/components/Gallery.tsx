@@ -5,7 +5,7 @@ import { extractA1111PositivePrompt, extractShareableMetadataText, parseComfyWor
 import { extractSettingsFromPrompt } from '../workflow/pngImport'
 import { extractImageSettingsFromPrompt } from '../workflow/imagePngImport'
 import { extractKrea2SettingsFromPrompt } from '../workflow/krea2PngImport'
-import { extractAnime2RealSettings, type Anime2RealSettings } from '../workflow/anime2realFieldMap'
+import { extractQwenEditSettings, type ImageRef as QwenImageRef, type QwenEditSettings } from '../workflow/qwenEditFieldMap'
 import { uploadImage, type ComfyWorkflow } from '../api/comfyClient'
 import type { GenerationSettings } from '../workflow/fieldMap'
 import type { ImageGenerationSettings } from '../workflow/imageFieldMap'
@@ -31,7 +31,7 @@ export type ImportPayload = (
   | { kind: 'video'; settings: Partial<GenerationSettings> }
   | { kind: 'sdxl'; settings: Partial<ImageGenerationSettings> }
   | { kind: 'krea2'; settings: Partial<Krea2GenerationSettings> }
-  | { kind: 'anime2real'; settings: Partial<Anime2RealSettings> }
+  | { kind: 'qwenedit'; settings: Partial<QwenEditSettings> & { inputImage?: QwenImageRef | null } }
 ) & { addLoras?: LoraAdd[] }
 
 // Gallery source id -> which Create tab its metadata should populate. Kept
@@ -111,7 +111,7 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
   }, [items])
   const [metadata, setMetadata] = useState<MetadataState | null>(null)
   const [metadataLoadingName, setMetadataLoadingName] = useState<string | null>(null)
-  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | 'anime2real' | null>(null)
+  const [sendingAction, setSendingAction] = useState<'settings' | 'image' | 'qwenedit' | null>(null)
   // The subfolder path you just came *up* from, so it can be highlighted in
   // its parent's folder list — a plain "Geri" with no other cue made it easy
   // to lose track of which folder you were just in, especially in a source
@@ -209,10 +209,10 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
         // workflows share almost no node identities with each other.
         try {
           const workflow = parseComfyWorkflowJson(chunks.prompt) as ComfyWorkflow
-          // Anime2Real results are saved into the Krea folder, so they're
+          // Edit (Qwen) results are saved into the Krea folder, so they're
           // told apart from plain Krea2 images by their workflow.
-          const anime2real = extractAnime2RealSettings(workflow)
-          if (anime2real) payload = { kind: 'anime2real', settings: anime2real }
+          const qwenEdit = extractQwenEditSettings(workflow)
+          if (qwenEdit) payload = { kind: 'qwenedit', settings: qwenEdit }
           else if (kind === 'video') payload = { kind, settings: extractSettingsFromPrompt(workflow).settings }
           else if (kind === 'sdxl') payload = { kind, settings: extractImageSettingsFromPrompt(workflow).settings }
           else payload = { kind, settings: extractKrea2SettingsFromPrompt(workflow).settings }
@@ -298,14 +298,14 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
 
   useBackHandler(active && currentPath !== '', goUp)
 
-  // Sends this exact PNG as the Edit (Flux) tab's input picture (to be edited, or turned into a
-  // realistic photo) — independent of whatever settings it carries.
-  async function handleSendToAnime2Real() {
+  // Sends this exact PNG as the Edit (Qwen) tab's picture 1 — independent of
+  // whatever settings it carries.
+  async function handleSendToEdit() {
     if (!metadata?.imageBlob) return
-    setSendingAction('anime2real')
+    setSendingAction('qwenedit')
     try {
       const inputImage = await uploadCurrentImage()
-      if (inputImage) onSendToCreate({ kind: 'anime2real', settings: { inputImage } })
+      if (inputImage) onSendToCreate({ kind: 'qwenedit', settings: { inputImage } })
       setMetadata(null)
     } catch (err) {
       alert(`Görsel gönderilemedi: ${(err as Error).message}`)
@@ -461,8 +461,8 @@ export function Gallery({ active, onSendToCreate, onLock }: Props) {
         sendingSettings={sendingAction === 'settings'}
         onSendImageOnly={metadata?.imageBlob ? handleSendImageOnly : undefined}
         sendingImage={sendingAction === 'image'}
-        onSendToAnime2Real={metadata?.imageBlob ? handleSendToAnime2Real : undefined}
-        sendingAnime2Real={sendingAction === 'anime2real'}
+        onSendToEdit={metadata?.imageBlob ? handleSendToEdit : undefined}
+        sendingEdit={sendingAction === 'qwenedit'}
       />
     </div>
   )

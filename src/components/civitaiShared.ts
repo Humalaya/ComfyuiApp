@@ -40,26 +40,30 @@ export function formatCount(n: number): string {
   return String(n)
 }
 
-// Recently used Civitai tags, per list ('image' covers videos; 'model').
-const RECENT_MAX = 12
-export const recentCivitaiTagsKey = (kind: string) => `civitai-recent-tags:${kind}`
+// Starred Civitai tags, per list ('image' covers videos; 'model') — shown in
+// the feed's tag row and at the top of the tag picker. (Replaced the old
+// "recently used" list, which filled up with one-off picks.)
+export const starredCivitaiTagsKey = (kind: string) => `civitai-starred-tags:${kind}`
 
-export function loadRecentCivitaiTags(kind: string): CivitaiTag[] {
+export function loadStarredCivitaiTags(kind: string): CivitaiTag[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(recentCivitaiTagsKey(kind)) ?? '[]') as unknown
+    const raw = JSON.parse(localStorage.getItem(starredCivitaiTagsKey(kind)) ?? '[]') as unknown
     return Array.isArray(raw) ? raw.filter((t): t is CivitaiTag => typeof t?.id === 'number' && typeof t?.name === 'string') : []
   } catch {
     return []
   }
 }
 
-// Remembers a picked tag at the front of this kind's recent list.
-export function rememberCivitaiTag(kind: 'image' | 'model', tag: CivitaiTag) {
+// Stars the tag (at the end of the list) or unstars it; returns the new list.
+export function toggleStarredCivitaiTag(kind: 'image' | 'model', tag: CivitaiTag): CivitaiTag[] {
+  const list = loadStarredCivitaiTags(kind)
+  // By name: a model's own tags (from its page) come without an id.
+  const next = list.some((t) => t.name === tag.name) ? list.filter((t) => t.name !== tag.name) : [...list, tag]
   try {
-    // By name: a model's own tags (from its page) come without an id.
-    const next = [tag, ...loadRecentCivitaiTags(kind).filter((t) => t.name !== tag.name)].slice(0, RECENT_MAX)
-    localStorage.setItem(recentCivitaiTagsKey(kind), JSON.stringify(next))
+    localStorage.setItem(starredCivitaiTagsKey(kind), JSON.stringify(next))
+    localStorage.removeItem(`civitai-recent-tags:${kind}`)
   } catch {
     // not remembered — fine
   }
+  return next
 }

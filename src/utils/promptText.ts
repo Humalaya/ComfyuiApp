@@ -82,3 +82,27 @@ export function insertPromptTag(prompt: string, tag: string, cursor: number | nu
   const trail = after && !/^\s/.test(after) ? ' ' : ''
   return { text: before + piece + trail + after, cursor: before.length + piece.length }
 }
+
+// Words of `before` that are gone from `after` and weren't named in the
+// change request — shown under an edited prompt, so a detail the model
+// dropped anyway doesn't go unnoticed. Tag prompts (SDXL) compare whole
+// tags, prose compares words of 4+ letters.
+export function droppedParts(before: string, after: string, request: string): string[] {
+  const norm = (t: string) =>
+    t
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim()
+  const afterText = ` ${norm(after)} `
+  const asked = ` ${norm(request)} `
+  const tagLike = (before.match(/,/g)?.length ?? 0) > before.split(/\s+/).length / 4
+  const parts = tagLike ? before.split(/[,\n]+/) : before.split(/\s+/)
+  const out = new Set<string>()
+  for (const raw of parts) {
+    const n = norm(raw)
+    if (n.length < (tagLike ? 2 : 4)) continue
+    if (afterText.includes(` ${n} `) || asked.includes(` ${n} `)) continue
+    out.add(raw.trim().replace(/^[^\p{L}\p{N}(]+|[^\p{L}\p{N})]+$/gu, ''))
+  }
+  return [...out].filter(Boolean).slice(0, 20)
+}

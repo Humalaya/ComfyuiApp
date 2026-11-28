@@ -172,7 +172,13 @@ export function CivitaiModelFeed({ query, update, onOpen }: Props) {
         ))}
       </div>
 
-      <CivitaiTagBar kind="model" tag={query.tag} onChange={(tag) => update({ tag })} />
+      <CivitaiTagBar
+        kind="model"
+        multi={false}
+        included={query.tag ? [query.tag] : []}
+        excluded={[]}
+        onChange={(inc) => update({ tag: inc[0] ?? null })}
+      />
 
       {error && (
         <div className="status-warning">

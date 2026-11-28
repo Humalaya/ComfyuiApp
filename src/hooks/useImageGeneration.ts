@@ -105,7 +105,7 @@ function extractImageFiles(outputs: Record<string, unknown>, outputNodeId: strin
   return nodeOutput.images ?? nodeOutput.gifs ?? nodeOutput.videos ?? []
 }
 
-export function useImageGeneration(outputNodeId: string, kind: 'sdxl' | 'krea2' | 'anime2real') {
+export function useImageGeneration(outputNodeId: string, kind: 'sdxl' | 'krea2' | 'qwenedit') {
   const [state, setState] = useState<ImageGenState>(initialState)
   // Bumped on every terminal transition — lets a caller (each Create tab's
   // "recently finished" list) react to every settle, including two

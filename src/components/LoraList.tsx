@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NumberField } from './NumberField'
 import { LoraPicker } from './LoraPicker'
 import { loraThumbnailUrl } from '../api/comfyClient'
@@ -55,6 +55,18 @@ export function LoraList({ loras, loraNames, tab, onChange, onSendToPrompt }: Pr
   const freeSlots = loras.length - used.length
 
   const families = useLoraFamilies()
+
+  // A LoRA whose file is gone from the PC (deleted, moved) leaves its slot:
+  // it would only make ComfyUI reject the job. Only once ComfyUI's list has
+  // loaded — an empty list means "not known yet", not "none".
+  const missingKey = loraNames.length === 0 ? '' : loras.map((s) => (s.lora && !loraNames.includes(s.lora) ? s.lora : '')).join('|')
+  useEffect(() => {
+    if (!missingKey.replace(/\|/g, '')) return
+    loras.forEach((slot, index) => {
+      if (slot.lora && !loraNames.includes(slot.lora)) onChange(index, EMPTY_SLOT)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingKey])
 
   function loadCivitai(name: string, force = false) {
     if (!force && civitai[name]) return

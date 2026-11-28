@@ -1,6 +1,6 @@
 // Prompt geçmişi / kayıtlı promptlar — server/promptLibrary.js.
 
-export type PromptKind = 'video' | 'sdxl' | 'krea2' | 'anime2real'
+export type PromptKind = 'video' | 'sdxl' | 'krea2' | 'qwenedit'
 
 export interface PromptHistoryEntry {
   text: string

@@ -28,7 +28,10 @@ export function comfyHttpProxy(comfyTarget) {
         port: target.port || 80,
         method: req.method,
         path: req.url.replace(/^\/comfy-api/, '') || '/',
-        headers: { ...req.headers, host: target.host },
+        // Origin rewritten too: ComfyUI 403s a request whose Origin doesn't
+        // match its Host when the Host is a loopback address (its CSRF guard)
+        // — and to ComfyUI every proxied request comes from this server.
+        headers: { ...req.headers, host: target.host, ...(req.headers.origin ? { origin: `http://${target.host}` } : {}) },
       },
       (up) => {
         res.writeHead(up.statusCode ?? 502, up.headers)
@@ -53,7 +56,10 @@ export function attachComfyWsProxy(server, comfyTarget) {
       const lines = [`${req.method} ${req.url.replace(/^\/comfy-ws/, '/ws')} HTTP/${req.httpVersion}`]
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i]
-        lines.push(`${name}: ${name.toLowerCase() === 'host' ? target.host : req.rawHeaders[i + 1]}`)
+        const lower = name.toLowerCase()
+        // Host and Origin point at ComfyUI itself — see comfyHttpProxy.
+        const value = lower === 'host' ? target.host : lower === 'origin' ? `http://${target.host}` : req.rawHeaders[i + 1]
+        lines.push(`${name}: ${value}`)
       }
       upstream.write(lines.join('\r\n') + '\r\n\r\n')
       if (head?.length) upstream.write(head)

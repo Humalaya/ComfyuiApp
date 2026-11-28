@@ -74,6 +74,11 @@ export function normalizeSettings(raw: unknown, defaults: GenerationSettings = g
     lastFrameEnabled: typeof r.lastFrameEnabled === 'boolean' ? r.lastFrameEnabled : lastFrameImage !== null,
     videoMode: r.videoMode === 'reference' ? 'reference' : 'frames',
     refImageSize: r.refImageSize === 'max' ? 'max' : 'match',
+    extraRefs: defaults.extraRefs.map((def, i) => {
+      const x = Array.isArray(r.extraRefs) ? (r.extraRefs[i] as Partial<GenerationSettings['extraRefs'][number]> | undefined) : undefined
+      if (!x || typeof x !== 'object') return def
+      return { image: isInputImage(x.image) ? x.image : null, on: typeof x.on === 'boolean' ? x.on : def.on }
+    }),
     loras: normalizeLoras(r.loras, defaults.loras).slice(0, LORA_SLOT_COUNT),
     batchCount: typeof r.batchCount === 'number' && Number.isFinite(r.batchCount) ? r.batchCount : defaults.batchCount,
   }

@@ -47,7 +47,7 @@ const TEMPLATE_TABS = {
   'template.json': 'Video',
   'imageTemplate.json': 'SDXL',
   'krea2Template.json': 'Krea2',
-  'anime2realTemplate.json': 'Anime2Real',
+  'qwenEditTemplate.json': 'Edit',
 }
 
 function loadProtected() {

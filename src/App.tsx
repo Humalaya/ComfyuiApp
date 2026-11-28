@@ -12,7 +12,7 @@ import { Gallery, type ImportPayload } from './components/Gallery'
 import { GalleryLockGate } from './components/GalleryLock'
 import { ImageGenerateTab } from './components/ImageGenerateTab'
 import { Krea2GenerateTab } from './components/Krea2GenerateTab'
-import { Anime2RealGenerateTab } from './components/Anime2RealGenerateTab'
+import { QwenEditGenerateTab } from './components/QwenEditGenerateTab'
 import { SettingsTab } from './components/SettingsTab'
 import { UpdateBanner } from './components/UpdateBanner'
 import { UretDrawer, type UretView } from './components/UretDrawer'
@@ -27,10 +27,10 @@ import { modelLabel } from './utils/modelLabel'
 import { applyVideoAlignment, effectiveVideoSeconds, hasImg2Vid, toggleImg2Vid, videoTask } from './workflow/videoPromptModes'
 import { useObjectInfo } from './hooks/useObjectInfo'
 import { useComfyGeneration } from './hooks/useComfyGeneration'
-import { buildWorkflow, getDefaultSettings, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
+import { buildWorkflow, getDefaultSettings, referenceImages, type GenerationSettings, type LoraSlot } from './workflow/fieldMap'
 import type { ImageGenerationSettings } from './workflow/imageFieldMap'
 import type { Krea2GenerationSettings } from './workflow/krea2FieldMap'
-import type { Anime2RealSettings } from './workflow/anime2realFieldMap'
+import type { QwenEditSettings, ImageRef as QwenImageRef } from './workflow/qwenEditFieldMap'
 import { loadSettings, normalizeSettings, saveSettings } from './storage/settingsStorage'
 import { useRemoteQueue } from './storage/remoteQueueStorage'
 import { PromptGenerator } from './components/PromptGenerator'
@@ -144,12 +144,14 @@ export default function App() {
   const [civitaiModelRequest, setCivitaiModelRequest] = useState<ModelRef | null>(null)
   // The sub-view before the current one — long-press on Üret goes back to it.
   const previousView = useRef<UretView | null>(null)
-  const [imageModel, setImageModel] = useState<'sdxl' | 'krea2' | 'anime2real'>('sdxl')
+  const [imageModel, setImageModel] = useState<'sdxl' | 'krea2' | 'qwenedit'>('sdxl')
   // See PendingImport above — null means "nothing pending", each tab only
   // reacts when `id` actually changes.
   const [imageImportRequest, setImageImportRequest] = useState<PendingImport<ImageGenerationSettings> | null>(null)
   const [krea2ImportRequest, setKrea2ImportRequest] = useState<PendingImport<Krea2GenerationSettings> | null>(null)
-  const [anime2realImportRequest, setAnime2realImportRequest] = useState<PendingImport<Anime2RealSettings> | null>(null)
+  const [qwenEditImportRequest, setQwenEditImportRequest] = useState<PendingImport<
+    QwenEditSettings & { inputImage?: QwenImageRef | null }
+  > | null>(null)
   // Restores whatever was last saved (prompt, seed, model, LoRAs, input
   // image reference, ...) so a reload — screen lock, OEM background kill,
   // manual refresh — doesn't wipe the form back to scratch. Only a true
@@ -363,8 +365,8 @@ export default function App() {
       setImageModel('krea2')
       goToUret('image')
     } else {
-      setAnime2realImportRequest({ settings: payload.settings, addLoras: payload.addLoras, id: Date.now() })
-      setImageModel('anime2real')
+      setQwenEditImportRequest({ settings: payload.settings, id: Date.now() })
+      setImageModel('qwenedit')
       goToUret('image')
     }
   }
@@ -490,10 +492,10 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={imageModel === 'anime2real' ? 'seg-btn seg-btn-active' : 'seg-btn'}
-            onClick={() => setImageModel('anime2real')}
+            className={imageModel === 'qwenedit' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => setImageModel('qwenedit')}
           >
-            Edit (Flux)
+            Edit (Qwen)
           </button>
         </div>
         {/* Both stay mounted for the same reason as the outer tabs — switching
@@ -504,8 +506,8 @@ export default function App() {
         <div style={{ display: imageModel === 'krea2' ? 'block' : 'none' }}>
           <Krea2GenerateTab importRequest={krea2ImportRequest} />
         </div>
-        <div style={{ display: imageModel === 'anime2real' ? 'block' : 'none' }}>
-          <Anime2RealGenerateTab importRequest={anime2realImportRequest} />
+        <div style={{ display: imageModel === 'qwenedit' ? 'block' : 'none' }}>
+          <QwenEditGenerateTab importRequest={qwenEditImportRequest} />
         </div>
       </div>
 
@@ -636,6 +638,22 @@ export default function App() {
         </div>
 
         {settings.videoMode === 'reference' && (
+          <div className="picture-frame-row">
+            {settings.extraRefs.map((ref, i) => (
+              <ImageUploader
+                key={i}
+                label={`Referans ${i + 3}`}
+                help={`İsteğe bağlı ${i + 3}. referans (ör. bir eşya, kıyafet ya da başka bir karakter). Prompt açık referanslara sırayla <Picture 1>, <Picture 2>… diye işaret eder — kapalı olan sıradakilerin numarasını kaydırır.`}
+                enabled={ref.on}
+                onToggleEnabled={(on) => setSettings((s) => ({ ...s, extraRefs: s.extraRefs.map((r, j) => (j === i ? { ...r, on } : r)) }))}
+                value={ref.image}
+                onChange={(image) => setSettings((s) => ({ ...s, extraRefs: s.extraRefs.map((r, j) => (j === i ? { ...r, image } : r)) }))}
+              />
+            ))}
+          </div>
+        )}
+
+        {settings.videoMode === 'reference' && (
           <div className="field">
             <span className="field-label">
               Referans kalitesi
@@ -682,11 +700,8 @@ export default function App() {
                 const seconds = `duration: ${effectiveVideoSeconds(settings.videoLengthSeconds).toFixed(2)} seconds`
                 const aspect = settings.aspectRatio ? `; aspect: ${settings.aspectRatio}` : ''
                 if (settings.videoMode === 'reference') {
-                  const n = [
-                    settings.inputImageEnabled && settings.inputImage,
-                    settings.lastFrameEnabled && settings.lastFrameImage,
-                  ].filter(Boolean).length
-                  const refs = n === 0 ? 'none' : n === 1 ? '<Picture 1>' : '<Picture 1>, <Picture 2>'
+                  const n = referenceImages(settings).length
+                  const refs = n === 0 ? 'none' : Array.from({ length: n }, (_, i) => `<Picture ${i + 1}>`).join(', ')
                   return `Task: REF2VA; references: ${refs}; ${seconds}${aspect}`
                 }
                 const task = videoTask(

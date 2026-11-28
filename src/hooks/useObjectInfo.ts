@@ -9,6 +9,13 @@ interface ObjectInfoState {
   // krea2FieldMap.ts), sharing the folder with SDXL-adjacent checkpoints even
   // though SDXL itself uses a separate CheckpointLoaderSimple, not UNETLoader.
   krea2UnetNames: string[]
+  // The same "image" folder's Qwen Image models — Edit (Qwen)'s list; kept
+  // out of krea2UnetNames (a different model family).
+  qwenUnetNames: string[]
+  // Text encoders / VAEs in the "image" subfolders — Edit (Qwen) snaps to
+  // these when its saved one is gone.
+  imageClipNames: string[]
+  imageVaeNames: string[]
   loraNames: string[]
   // Checkpoints (used by the Text2Img screen's CheckpointLoaderSimple) —
   // fetched here alongside everything else rather than in a separate hook,
@@ -35,6 +42,9 @@ const initialState: ObjectInfoState = {
   aspectRatios: [],
   unetNames: [],
   krea2UnetNames: [],
+  qwenUnetNames: [],
+  imageClipNames: [],
+  imageVaeNames: [],
   loraNames: [],
   checkpointNames: [],
   samplerNames: [],
@@ -80,19 +90,26 @@ export function useObjectInfo() {
 
     async function load() {
       try {
-        const [resolution, unet, lora, checkpoint, ksampler, krea2Sampler] = await Promise.all([
+        const [resolution, unet, lora, checkpoint, ksampler, krea2Sampler, clip, vae] = await Promise.all([
           getObjectInfo('ResolutionSelector'),
           getObjectInfo('UNETLoader'),
           getObjectInfo('LoraLoader'),
           getObjectInfo('CheckpointLoaderSimple'),
           getObjectInfo('KSampler'),
           getObjectInfo('ClownsharKSampler_Beta'),
+          getObjectInfo('CLIPLoader'),
+          getObjectInfo('VAELoader'),
         ])
+        const imageUnets = filterByFolder(extractComboOptions(unet['UNETLoader'], 'unet_name'), 'image')
+        const isQwen = (n: string) => /qwen/i.test(n)
         if (cancelled) return
         setState({
           aspectRatios: extractComboOptions(resolution['ResolutionSelector'], 'aspect_ratio'),
           unetNames: filterByFolder(extractComboOptions(unet['UNETLoader'], 'unet_name'), 'video'),
-          krea2UnetNames: filterByFolder(extractComboOptions(unet['UNETLoader'], 'unet_name'), 'image'),
+          krea2UnetNames: imageUnets.filter((n) => !isQwen(n)),
+          qwenUnetNames: imageUnets.filter(isQwen),
+          imageClipNames: filterByFolder(extractComboOptions(clip['CLIPLoader'], 'clip_name'), 'image'),
+          imageVaeNames: filterByFolder(extractComboOptions(vae['VAELoader'], 'vae_name'), 'image'),
           loraNames: extractComboOptions(lora['LoraLoader'], 'lora_name'),
           checkpointNames: extractComboOptions(checkpoint['CheckpointLoaderSimple'], 'ckpt_name'),
           samplerNames: extractComboOptions(ksampler['KSampler'], 'sampler_name'),
@@ -105,6 +122,7 @@ export function useObjectInfo() {
         if (cancelled) return
         setState((s) => ({ ...s, loading: false, error: (err as Error).message }))
         retryTimer = setTimeout(() => {
+          retryTimer = null
           retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS)
           load()
         }, retryDelay)
@@ -112,9 +130,16 @@ export function useObjectInfo() {
     }
 
     load()
+    // Back to the app (or tab): fetch again, so a model or LoRA added or
+    // deleted on the PC meanwhile shows up — or drops out of the LoRA lists.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && retryTimer === null) load()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       cancelled = true
       if (retryTimer !== null) clearTimeout(retryTimer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])
 

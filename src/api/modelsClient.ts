@@ -1,6 +1,6 @@
 // Client for server/models.js — Civitai model info, PC-side downloads, the
 // Modeller view (list / move / delete / preview picture) and disk space.
-import { loadAnime2RealSettings } from '../storage/anime2realSettingsStorage'
+import { loadQwenEditSettings } from '../storage/qwenEditSettingsStorage'
 import { loadImageSettings } from '../storage/imageSettingsStorage'
 import { loadKrea2Settings } from '../storage/krea2SettingsStorage'
 import { loadSettings } from '../storage/settingsStorage'
@@ -141,7 +141,7 @@ export function modelsInUse(): Record<string, string[]> {
     add(loadSettings()?.unetName, 'Video')
     add(loadImageSettings()?.checkpoint, 'SDXL')
     add(loadKrea2Settings()?.unetName, 'Krea2')
-    add(loadAnime2RealSettings()?.unetName, 'Anime2Real')
+    add(loadQwenEditSettings()?.unetName, 'Edit')
   } catch {
     // storage unavailable — the server's template check still applies
   }

@@ -9,14 +9,17 @@ type ImageRef = GenerationSettings['inputImage']
 interface Props {
   label: string
   help: string
-  // Omit both for a required picture (Anime2Real's input): no switch, always on.
+  // Omit both for a required picture (Edit's picture 1): no switch, always on.
   enabled?: boolean
   onToggleEnabled?: (enabled: boolean) => void
   value: ImageRef
   onChange: (image: ImageRef) => void
-  // Full-width use (Anime2Real): a short box showing the whole picture,
+  // Full-width use (Edit's picture 1): a short box showing the whole picture,
   // instead of the tall cropped one meant for two side by side.
   wide?: boolean
+  // In a grid (Edit's 2×2): an off picture keeps an empty, dimmed box —
+  // tapping it switches the picture on — so the cells stay aligned.
+  offPlaceholder?: boolean
 }
 
 // Backs both "Picture 1" (first_frame) and "Picture 2" (last_frame) on the
@@ -27,7 +30,16 @@ interface Props {
 // purely about which of these are wired at all — the switch lets you turn
 // one off without losing the picked image, in case you want to A/B the same
 // prompt with and without it.
-export function ImageUploader({ label, help, enabled = true, onToggleEnabled, value, onChange, wide = false }: Props) {
+export function ImageUploader({
+  label,
+  help,
+  enabled = true,
+  onToggleEnabled,
+  value,
+  onChange,
+  wide = false,
+  offPlaceholder = false,
+}: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -81,6 +93,12 @@ export function ImageUploader({ label, help, enabled = true, onToggleEnabled, va
           </button>
         )}
       </div>
+
+      {!enabled && offPlaceholder && (
+        <button type="button" className="image-uploader image-uploader-off" onClick={() => onToggleEnabled?.(true)}>
+          <span className="image-placeholder">Kapalı — açmak için dokun</span>
+        </button>
+      )}
 
       {enabled && (
         <>

@@ -39,6 +39,8 @@ interface Props {
   onPickTag?: (tag: CivitaiTag, type: 'image' | 'video') => void
   // One of the model's own tags tapped — Modeller filtered by it.
   onPickModelTag?: (name: string) => void
+  // A poster's name tapped in the viewer — their posts.
+  onPickUser?: (username: string) => void
 }
 
 const VIDEO_BASES = /video|wan|ltx|minimax|hunyuan|seedance|mochi|cogvideo/i
@@ -47,7 +49,16 @@ const VIDEO_BASES = /video|wan|ltx|minimax|hunyuan|seedance|mochi|cogvideo/i
 // a downloaded model's "Civitai sayfası"): what it is, every version with
 // its files — downloadable to the PC — and the images made with the chosen
 // version, sortable like the main feed.
-export function CivitaiModelPage({ model: ref, onClose, onOpenModel, onSendToCreate, onOpenModels, onPickTag, onPickModelTag }: Props) {
+export function CivitaiModelPage({
+  model: ref,
+  onClose,
+  onOpenModel,
+  onSendToCreate,
+  onOpenModels,
+  onPickTag,
+  onPickModelTag,
+  onPickUser,
+}: Props) {
   const [model, setModel] = useState<CivitaiModel | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [versionId, setVersionId] = useState<number | null>(ref.versionId ?? null)
@@ -158,6 +169,7 @@ export function CivitaiModelPage({ model: ref, onClose, onOpenModel, onSendToCre
               onOpenModel={onOpenModel}
               onSendToCreate={onSendToCreate}
               onPickTag={onPickTag}
+              onPickUser={onPickUser}
             />
           )}
         </>
@@ -323,12 +335,14 @@ function VersionImages({
   onOpenModel,
   onSendToCreate,
   onPickTag,
+  onPickUser,
 }: {
   version: CivitaiModelVersion
   initialType: 'image' | 'video'
   onOpenModel: (ref: ModelRef) => void
   onSendToCreate: (payload: ImportPayload) => void
   onPickTag?: (tag: CivitaiTag, type: 'image' | 'video') => void
+  onPickUser?: (username: string) => void
 }) {
   const [type, setType] = useState(initialType)
   const [sort, setSort] = useState<CivitaiSort>('Most Reactions')
@@ -448,6 +462,10 @@ function VersionImages({
             onOpenModel({ versionId: mv.id, type: t })
           }}
           onPickTag={onPickTag}
+          onPickUser={(name) => {
+            setViewerIndex(null)
+            onPickUser?.(name)
+          }}
         />
       )}
     </div>

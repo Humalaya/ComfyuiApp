@@ -61,7 +61,8 @@ export function videoTask(firstFrame: boolean, lastFrame: boolean): VideoTask {
 }
 
 // Any alignment line at the start (ours or one the model wrote anyway).
-const ALIGNMENT_RE = /^\s*(For the target video, at 0\.00 seconds into the target video,|How the reference pictures align with the target video)[^\n]*\n*/
+const ALIGNMENT_RE =
+  /^\s*(For the target video, at 0\.00 seconds into the target video,|How the reference pictures align with the target video)[^\n]*\n*/
 
 // What the workflow really renders for a requested length (template.json
 // node 131): max(5, round(s·24)) frames, rounded up onto MiniMax's 17k+5

@@ -30,6 +30,7 @@ export const KREA2_NODE_IDS = {
   pass2: '91:109',
   diffusionModel: '91:100', // UNETLoader — the actual FLUX/Krea2 checkpoint
   vae: '91:99',
+  clip: '91:92', // CLIPLoader (type krea2) — the Qwen3-VL text encoder
 } as const
 
 export const KREA2_LORA_SLOT_COUNT = 22
@@ -45,6 +46,10 @@ export interface Krea2GenerationSettings {
   // FLUX/Krea2-compatible checkpoint, so this dropdown lists that, same as
   // the video tab's Model dropdown lists the "Video/" folder.
   unetName: string
+  // CLIPLoader's text encoder and VAELoader's VAE (text_encoders/image,
+  // vae/image) — Gelişmiş Ayarlar.
+  clipName: string
+  vaeName: string
   // No negativePrompt field here — removed from the UI on request. The
   // underlying CLIPTextEncode node (KREA2_NODE_IDS.negativePrompt) still
   // exists in the workflow, just left at its own fixed default text.
@@ -96,6 +101,8 @@ export function getDefaultKrea2Settings(): Krea2GenerationSettings {
   return {
     prompt: String(t[KREA2_NODE_IDS.positivePrompt].inputs.text ?? ''),
     unetName: String(t[KREA2_NODE_IDS.diffusionModel].inputs.unet_name ?? ''),
+    clipName: String(t[KREA2_NODE_IDS.clip].inputs.clip_name ?? ''),
+    vaeName: String(t[KREA2_NODE_IDS.vae].inputs.vae_name ?? ''),
     seed: Number(t[KREA2_NODE_IDS.seedEnhancer].inputs.seed ?? 0),
     fixedSeed: false,
     width: Number(t[KREA2_NODE_IDS.latent].inputs.width ?? 1440),
@@ -119,6 +126,8 @@ export function buildKrea2Workflow(settings: Krea2GenerationSettings): ComfyWork
 
   workflow[KREA2_NODE_IDS.positivePrompt].inputs.text = settings.prompt
   workflow[KREA2_NODE_IDS.diffusionModel].inputs.unet_name = settings.unetName
+  workflow[KREA2_NODE_IDS.clip].inputs.clip_name = settings.clipName
+  workflow[KREA2_NODE_IDS.vae].inputs.vae_name = settings.vaeName
   // Negative prompt intentionally left untouched — see Krea2GenerationSettings.
   workflow[KREA2_NODE_IDS.latent].inputs.width = settings.width
   workflow[KREA2_NODE_IDS.latent].inputs.height = settings.height

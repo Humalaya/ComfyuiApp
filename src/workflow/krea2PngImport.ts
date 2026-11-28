@@ -78,7 +78,9 @@ export function extractKrea2SettingsFromPrompt(prompt: ComfyWorkflow): Krea2PngI
     const loras: LoraSlot[] = []
     for (let i = 1; i <= KREA2_LORA_SLOT_COUNT; i++) {
       const slot = loraNode.inputs[`lora_${i}`] as LoraSlot | undefined
-      loras.push(slot ? { on: !!slot.on, lora: String(slot.lora ?? ''), strength: num(slot.strength, 1) } : { on: false, lora: '', strength: 1 })
+      loras.push(
+        slot ? { on: !!slot.on, lora: String(slot.lora ?? ''), strength: num(slot.strength, 1) } : { on: false, lora: '', strength: 1 },
+      )
     }
     settings.loras = loras
   }

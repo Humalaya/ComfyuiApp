@@ -3,7 +3,7 @@
 // route in promptgen.js and offline prompt tests build exactly the same
 // messages.
 
-export const PROMPT_TARGETS = new Set(['sdxl', 'krea2', 'krea2edit', 'anime2real', 'video', 'videoref'])
+export const PROMPT_TARGETS = new Set(['sdxl', 'krea2', 'qwenedit', 'video', 'videoref'])
 
 // Both MiniMax H3 modes: first/last frame (video) and reference (videoref).
 const isVideo = (target) => target === 'video' || target === 'videoref'
@@ -82,27 +82,52 @@ export function maxTokensFor(target, length, thinking) {
 // writing a system text or a prompt would reach.
 const clip = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 
-// → { messages, length } or { error } for a bad request.
+// Edit mode ("Tekrar" on a suggestion, and "✏️ Düzenle" on the prompt
+// already in the box): change only what's asked. Revisions used to go back
+// through the generator with its Length line, and the model rewrote the
+// whole prompt to that length — dropping details nobody asked it to touch.
+// Here there's no Length line, the temperature is low, and the rule below
+// asks for a minimal edit.
+export const EDIT_RULE = `EDIT MODE — you are not writing a new prompt. You are editing an existing prompt the user already likes, and they only want the change they describe.
+- Apply exactly the requested change, and nothing else.
+- Keep every other part of the prompt word for word: the same words, tags, names, numbers, quoted text and spoken lines, weights, section headers, shot timestamps, line breaks and order. Never rephrase, summarize, shorten, reorder, translate or "improve" a part the change doesn't touch, and never drop a detail.
+- Remove or replace something only when the user asks for that, or when it directly contradicts the change — then replace just that part, keeping the rest of its sentence or block.
+- Put an addition where it belongs in the prompt's own layout, written in the prompt's own style; the format rules above still apply to what you write.
+- The change request may be in any language; the prompt keeps its own language.
+Output only the full edited prompt — the whole prompt, not just the changed part, with no comments.`
+
+export const EDIT_TEMPERATURE = 0.3
+
+// → { messages, length, edit } or { error } for a bad request. With
+// `previous` + `feedback` it's an edit of that prompt (see EDIT_RULE); the
+// original `request` isn't needed then.
 export function buildPromptGenMessages({ target, system, request, context, length, previous, feedback }) {
   if (!PROMPT_TARGETS.has(target)) return { error: 'Geçersiz sekme.' }
   const len = PROMPT_LENGTHS.has(length) ? length : 'medium'
   const sys = clip(system, 50000)
-  const ask = clip(request, 20000)
-  if (!sys || !ask) return { error: 'İstek boş.' }
   const ctx = clip(context, 1000)
+  const prev = clip(previous, 100000)
+  const fb = clip(feedback, 20000)
+  if (!sys) return { error: 'Talimat boş.' }
+  if (prev && fb) {
+    const ask = `Current prompt:\n<<<\n${prev}\n>>>\n\nChange to make: ${fb}`
+    return {
+      messages: [
+        { role: 'system', content: `${sys}\n\n${EDIT_RULE}` },
+        { role: 'user', content: ctx ? `${ask}\n\n(${ctx})` : ask },
+      ],
+      length: len,
+      edit: true,
+      // Room for the whole prompt again plus the change.
+      maxTokens: Math.ceil(prev.length / 2) + 800,
+    }
+  }
+  const ask = clip(request, 20000)
+  if (!ask) return { error: 'İstek boş.' }
   const rule = lengthRule(target, len, ctx)
   const messages = [
     { role: 'system', content: rule ? `${sys}\n\n${rule}` : sys },
     { role: 'user', content: ctx ? `${ask}\n\n(${ctx})` : ask },
   ]
-  const prev = clip(previous, 100000)
-  const fb = clip(feedback, 20000)
-  if (prev && fb) {
-    messages.push({ role: 'assistant', content: prev })
-    messages.push({
-      role: 'user',
-      content: `Revise the prompt above: ${fb}\nKeep everything else that wasn't asked to change. Output only the full revised prompt.`,
-    })
-  }
-  return { messages, length: len }
+  return { messages, length: len, edit: false }
 }
